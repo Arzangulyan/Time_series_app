@@ -115,7 +115,7 @@ start_point, end_point = st.sidebar.slider(
     'Выберите диапазон данных',
     0, time_series_selected.shape[0]-1, (0, time_series_selected.shape[0]-1), key='time series borders')
 
-'Временной ряд'
+'Выбранный временной ряд'
 st.write(time_series_selected.loc[start_point:end_point])
 st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
 
