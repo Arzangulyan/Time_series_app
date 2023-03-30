@@ -51,16 +51,15 @@ time_series = None
 #Выбор типа данных
 type_of_data = ["", "Искусственный ряд", "Загруженный ряд"]
 data_radio = st.sidebar.selectbox ("Выберите данные для обработки", type_of_data)
-
-
 nothing_selected (data_radio)
+
 
 if data_radio == 'Загруженный ряд':
     upload_file = st.sidebar.file_uploader(label="Загрузите файл CSV", type="CSV")
-    if upload_file != None:
-        time_series = pd.read_csv(upload_file)
-    else:
+    if upload_file == None:
         st.stop()
+    else:
+        time_series = pd.read_csv(upload_file)
 
 
 if data_radio == "Искусственный ряд":
@@ -81,13 +80,12 @@ if data_radio == "Искусственный ряд":
     #Создание словаря, в котором не измененные значения остануться нулями, а измененные поменяются
     param_Dict = {param_Name[i]: st.session_state[param_Name[i]] for i in range(len(param_Name))}
     paramDict_default.update(param_Dict)
-    paramDict_default
-
 
     time_series = syntetic_time_series(date_range, **paramDict_default)
 
 #Отображение ряда
-dframe = st.dataframe(time_series)
+df = st.dataframe(time_series)
+# st.dataframe(time_series)
 
 #НАДО ПОНЯТЬ, КАК ИЗБЕГАТ ОШИБКУ ВЕЗДЕ, ПОКА Я ЕЩЕ НЕ ЗАРУЗИЛ ДАННЫЕ, А НЕ ПИСАТЬ ВЕЗДЕ if != None
 
@@ -97,18 +95,43 @@ other_columns = list(time_series.columns)
 date_column_select = st.sidebar.selectbox(label='Выберите колонку отражающую время', options=([""]+other_columns))
 value_select = st.sidebar.selectbox(label='Выберите колонку для анализа', options=([""]+numeric_columns))
 
-nothing_selected(data_radio)
+#Блокер ошибок при отсутствии выбранного варианта
+nothing_selected(date_column_select)
 nothing_selected(value_select)
 
+time_series['Время_формат'] = pd.to_datetime(time_series[date_column_select])
+# date_column_formated = pd.to_datetime(time_series.loc[:, date_column_select])
+time_series_selected = time_series.loc[:,['Время_формат', value_select]]
+# time_series_selected = time_series[date_column_formated, value_select]
+df.write (time_series_selected)
+df_chart = st.line_chart(time_series_selected.iloc[:, 1])
 
-time_series_selected = time_series.loc[:,[date_column_select, value_select]]
-dframe.write (time_series_selected)
-
+#Слайдер для выбора и отображения нужного интервала ряда
 start_point, end_point = st.sidebar.slider(
     'Выберите диапазон данных',
     0, time_series_selected.shape[0]-1, (0, time_series_selected.shape[0]-1), key='time series borders')
-dframe.write(time_series_selected.loc[start_point:end_point])
+
+'Временной ряд'
+df.write(time_series_selected.loc[start_point:end_point])
+df_chart.line_chart(time_series_selected.iloc[start_point:end_point, 1])
+
 T_s_len = end_point-start_point #Размер выбранного диапазона
 st.sidebar.write("Размер выбранного диапазона:", T_s_len)
 
-st.line_chart(time_series_selected.iloc[:, 1])
+MA_checkbox = st.sidebar.checkbox('Усреднить ряд', key='MA_checkbox')
+if MA_checkbox == False:
+    pass
+else:
+    MA_step = st.sidebar.number_input('Введите шаг скользящего среднего', min_value=1, max_value=T_s_len)
+    st.write('Шаг скользящего среднего: ', MA_step, value=1)
+    time_series_selected['Усредненный'] = time_series_selected.loc[start_point:end_point].rolling(window=MA_step, min_periods=1).mean()
+
+    # compare_dframe = st.dataframe(time_series_selected.loc[start_point:end_point])
+
+    # col1, col2 = st.columns(2)
+    # with col1:
+    #     'Усредненный ряд'
+    #     dframe_chart_MA = st.line_chart(time_series_selected.loc[(start_point+MA_step):end_point, ['Усредненный']])
+    # with col2:
+    #     'Исходный ряд'
+    #     st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
