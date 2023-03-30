@@ -84,7 +84,9 @@ if data_radio == "Искусственный ряд":
     time_series = syntetic_time_series(date_range, **paramDict_default)
 
 #Отображение ряда
-df = st.dataframe(time_series)
+'Исходный временной ряд'
+dframe = st.dataframe(time_series)
+dframe_chart = st.line_chart(time_series.select_dtypes(include=['int', 'float']))
 # st.dataframe(time_series)
 
 #НАДО ПОНЯТЬ, КАК ИЗБЕГАТ ОШИБКУ ВЕЗДЕ, ПОКА Я ЕЩЕ НЕ ЗАРУЗИЛ ДАННЫЕ, А НЕ ПИСАТЬ ВЕЗДЕ if != None
@@ -103,8 +105,10 @@ time_series['Время_формат'] = pd.to_datetime(time_series[date_column_
 # date_column_formated = pd.to_datetime(time_series.loc[:, date_column_select])
 time_series_selected = time_series.loc[:,['Время_формат', value_select]]
 # time_series_selected = time_series[date_column_formated, value_select]
-df.write (time_series_selected)
-df_chart = st.line_chart(time_series_selected.iloc[:, 1])
+
+# 'Отформатированный временной ряд'
+# st.write(time_series_selected)
+# st.line_chart(time_series_selected.iloc[:, 1])
 
 #Слайдер для выбора и отображения нужного интервала ряда
 start_point, end_point = st.sidebar.slider(
@@ -112,8 +116,8 @@ start_point, end_point = st.sidebar.slider(
     0, time_series_selected.shape[0]-1, (0, time_series_selected.shape[0]-1), key='time series borders')
 
 'Временной ряд'
-df.write(time_series_selected.loc[start_point:end_point])
-df_chart.line_chart(time_series_selected.iloc[start_point:end_point, 1])
+st.write(time_series_selected.loc[start_point:end_point])
+st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
 
 T_s_len = end_point-start_point #Размер выбранного диапазона
 st.sidebar.write("Размер выбранного диапазона:", T_s_len)
@@ -126,12 +130,12 @@ else:
     st.write('Шаг скользящего среднего: ', MA_step, value=1)
     time_series_selected['Усредненный'] = time_series_selected.loc[start_point:end_point].rolling(window=MA_step, min_periods=1).mean()
 
-    # compare_dframe = st.dataframe(time_series_selected.loc[start_point:end_point])
+    compare_dframe = st.dataframe(time_series_selected.loc[start_point:end_point])
 
-    # col1, col2 = st.columns(2)
-    # with col1:
-    #     'Усредненный ряд'
-    #     dframe_chart_MA = st.line_chart(time_series_selected.loc[(start_point+MA_step):end_point, ['Усредненный']])
-    # with col2:
-    #     'Исходный ряд'
-    #     st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
+    col1, col2 = st.columns(2)
+    with col1:
+        'Усредненный ряд'
+        dframe_chart_MA = st.line_chart(time_series_selected.loc[(start_point+MA_step):end_point, ['Усредненный']])
+    with col2:
+        'Исходный ряд'
+        st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
