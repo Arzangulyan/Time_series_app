@@ -39,6 +39,15 @@ def syntetic_time_series(date_range, S_1_coef=0., S_1_freq=0., S_2_coef=0., S_2_
     time_series_df = DF_wrapper(date_range, time_series)
     return time_series_df
 
+# @st.cache_data
+def df_chart_display_loc(df, start, end, data_col_loc):
+    st.write(df.loc[start:end])
+    st.line_chart(df.loc[start:end, data_col_loc])
+# @st.cache_data
+def df_chart_display_iloc(df, start, end, data_col_iloc):
+    st.write(df.loc[start:end])
+    st.line_chart(df.iloc[start:end, data_col_iloc])
+
 # trigonometric_args = [S_1_coef, S_1_freq, S_2_coef, S_2_freq, S_3_coef, S_3_freq, C_1_coef, C_1_freq, C_2_coef, C_2_freq, C_3_coef, C_3_freq]
 
 st.title("Комплекс для работы с временными рядами")
@@ -85,8 +94,9 @@ if data_radio == "Искусственный ряд":
 
 #Отображение ряда
 'Исходный временной ряд'
-dframe = st.dataframe(time_series)
-dframe_chart = st.line_chart(time_series.select_dtypes(include=['int', 'float']))
+df_chart_display_loc(time_series, 0, len(time_series.loc[:]), data_col_loc=time_series.select_dtypes(include=['int', 'float']).columns)
+# dframe = st.dataframe(time_series)
+# dframe_chart = st.line_chart(time_series.select_dtypes(include=['int', 'float']))
 # st.dataframe(time_series)
 
 #НАДО ПОНЯТЬ, КАК ИЗБЕГАТ ОШИБКУ ВЕЗДЕ, ПОКА Я ЕЩЕ НЕ ЗАРУЗИЛ ДАННЫЕ, А НЕ ПИСАТЬ ВЕЗДЕ if != None
@@ -116,18 +126,22 @@ start_point, end_point = st.sidebar.slider(
     0, time_series_selected.shape[0]-1, (0, time_series_selected.shape[0]-1), key='time series borders')
 
 'Выбранный временной ряд'
-st.write(time_series_selected.loc[start_point:end_point])
-st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
+df_chart_display_iloc(time_series_selected, start_point, end_point, 1)
+# st.write(time_series_selected.loc[start_point:end_point])
+# st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
 
 T_s_len = end_point-start_point #Размер выбранного диапазона
 st.sidebar.write("Размер выбранного диапазона:", T_s_len)
 
 MA_checkbox = st.sidebar.checkbox('Усреднить ряд', key='MA_checkbox')
+m_a_step = 0 #объявление нулевого шага MA
 if MA_checkbox == False:
+    time_series_avg = time_series_selected
     pass
 else:
     MA_step = st.sidebar.number_input('Введите шаг скользящего среднего', min_value=1, max_value=T_s_len)
     st.write('Шаг скользящего среднего: ', MA_step, value=1)
+    # time_series_avg = time_series_selected.loc[start_point:end_point].rolling(window=MA_step, min_periods=1).mean()
     time_series_selected['Усредненный'] = time_series_selected.loc[start_point:end_point].rolling(window=MA_step, min_periods=1).mean()
 
     compare_dframe = st.dataframe(time_series_selected.loc[start_point:end_point])
@@ -139,3 +153,17 @@ else:
     with col2:
         'Исходный ряд'
         st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
+
+
+stationar_test_checkbox = st.sidebar.checkbox("Тест на стационарность", key="stat_test_checkbox")
+if stationar_test_checkbox:
+    stat_test_res = adfuller(time_series_selected.iloc[(start_point+m_a_step):end_point, -1])[1]
+    st.sidebar.write("Результаты теста на стационарность (p-value): ", stat_test_res)
+    if stat_test_res < 0.05: st.sidebar.write("Ряд стационарен по критерию 5%")
+    else: st.sidebar.write("Ряд НЕ стационарен по критерию 5%")
+
+if "final_dataframe" not in st.session_state:
+    st.session_state.final_dataframe = pd.DataFrame()
+
+st.session_state.final_dataframe = time_series_selected
+st.session_state
