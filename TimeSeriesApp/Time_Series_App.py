@@ -136,7 +136,6 @@ st.sidebar.write("Размер выбранного диапазона:", T_s_le
 MA_checkbox = st.sidebar.checkbox('Усреднить ряд', key='MA_checkbox')
 m_a_step = 0 #объявление нулевого шага MA
 if MA_checkbox == False:
-    time_series_avg = time_series_selected
     pass
 else:
     MA_step = st.sidebar.number_input('Введите шаг скользящего среднего', min_value=1, max_value=T_s_len)
@@ -153,6 +152,9 @@ else:
     with col2:
         'Исходный ряд'
         st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
+    
+    time_series_selected[value_select] = time_series_selected['Усредненный']
+    time_series_selected
 
 
 stationar_test_checkbox = st.sidebar.checkbox("Тест на стационарность", key="stat_test_checkbox")
@@ -161,6 +163,8 @@ if stationar_test_checkbox:
     st.sidebar.write("Результаты теста на стационарность (p-value): ", stat_test_res)
     if stat_test_res < 0.05: st.sidebar.write("Ряд стационарен по критерию 5%")
     else: st.sidebar.write("Ряд НЕ стационарен по критерию 5%")
+
+del time_series_selected['Усредненный']
 
 if "final_dataframe" not in st.session_state:
     st.session_state.final_dataframe = pd.DataFrame()
