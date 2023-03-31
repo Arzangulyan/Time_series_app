@@ -50,7 +50,7 @@ def df_chart_display_iloc(df, start, end, data_col_iloc):
 
 # trigonometric_args = [S_1_coef, S_1_freq, S_2_coef, S_2_freq, S_3_coef, S_3_freq, C_1_coef, C_1_freq, C_2_coef, C_2_freq, C_3_coef, C_3_freq]
 
-st.title("Комплекс для работы с временными рядами")
+st.title("МЕГА Комплекс для работы с временными рядами")
 
 # df = pd.read_csv("/Users/arzangulyan/Documents/Научка/Vietnam_CO2_Temp.csv")
 # st.line_chart(df['Temperature'])
