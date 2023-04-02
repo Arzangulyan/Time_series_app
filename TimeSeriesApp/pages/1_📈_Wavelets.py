@@ -24,19 +24,36 @@ def wavelet_transform(time_series, mother_wavelet):
     mother_switcher = {
     "Морле": "morl",
     "Гаусс": "gaus1",
-    "Мексиканская шляпа": "mexh",
-    "Другой": ""
+    "Мексиканская шляпа": "mexh"
 }
+    n_samples = len(time_series.iloc[:, 1])
+    scales = np.logspace(0, np.log10(n_samples / 4), num=n_samples // 4)
+
+    coef, freqs = pywt.cwt(time_series.iloc[:, 1], scales, mother_switcher.get(mother_wavelet))
     
-    coef, freqs = pywt.cwt(time_series.iloc[:, 1], np.arange(1, len(time_series)/4), mother_switcher.get(mother_wavelet))
-    return coef, freqs 
+    return coef, freqs
+
+
+    # coef, freqs = pywt.cwt(time_series.iloc[:, 1], np.arange(1, len(time_series)/4), mother_switcher.get(mother_wavelet))
+    # return coef, freqs 
+
+def plot_wavelet_transform(time_series, wavelet_select):
+    coef, freq = wavelet_transform(time_series, wavelet_select)
+    
+    fig, ax = plt.subplots()
+    ax.imshow(coef, cmap='copper', aspect='auto', extent=[0, len(time_series.iloc[:, 1]), freq[-1], freq[0]])
+    ax.set_title("Power Spectrum", fontsize=20)
+    ax.set_ylabel("Период", fontsize=18)
+    ax.set_xlabel("Время", fontsize=18)
+    ax.invert_yaxis()
+    
+    return fig
+
 
 time_series = st.session_state.final_dataframe
 
 df_chart_display_iloc(time_series)
-wavelet_select = st.sidebar.selectbox(label='Выберите материнский вейвлет', options=(["", "Морле", "Гаусс", "Мексиканская шляпа", "Другой"]))
-
-
+wavelet_select = st.sidebar.selectbox(label='Выберите материнский вейвлет', options=(["", "Морле", "Гаусс", "Мексиканская шляпа"]))
 
 # st.stop()
 if wavelet_select == "":
@@ -70,15 +87,18 @@ if wavelet_select == "":
 
 #REAL
 
-coef, freq = wavelet_transform(time_series, wavelet_select)
-fig1, ax1 = plt.subplots()
-ax1.imshow(coef, cmap = 'copper', aspect = 'auto')
-# sns.heatmap(coef, ax = ax, cmap = 'copper')
-# st.write(fig)
-ax1.set_title("Power Spectrum", fontsize=20)
-ax1.set_ylabel("Период", fontsize=18)
-ax1.set_xlabel("Время", fontsize=18)
-ax1.invert_yaxis()
+# coef, freq = wavelet_transform(time_series, wavelet_select)
+# fig1, ax1 = plt.subplots()
+# ax1.imshow(coef, cmap = 'copper', aspect = 'auto')
+# # sns.heatmap(coef, ax = ax, cmap = 'copper')
+# # st.write(fig)
+# ax1.set_title("Power Spectrum", fontsize=20)
+# ax1.set_ylabel("Период", fontsize=18)
+# ax1.set_xlabel("Время", fontsize=18)
+# ax1.invert_yaxis()
+# st.pyplot(fig1)
+
+fig1 = plot_wavelet_transform(time_series, wavelet_select)
 st.pyplot(fig1)
 
 
