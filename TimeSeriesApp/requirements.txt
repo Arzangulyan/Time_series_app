@@ -1,0 +1,10 @@
+streamlit
+numpy
+pandas
+pywt
+matplotlib.pyplot
+seaborn
+altair
+numpy.fft
+statsmodels.tsa.stattools
+statsmodels.graphics.tsaplots
