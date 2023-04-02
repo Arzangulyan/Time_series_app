@@ -10,8 +10,7 @@ from statsmodels.tsa.stattools import adfuller
 
 st.set_page_config(page_title="Wavelets")
 
-st.markdown("# Wavelets Demo")
-st.sidebar.header("Wavelets Demo")
+st.sidebar.header("Wavelets settings")
 
 def df_chart_display_iloc(df):
     col1, col2 = st.columns(2)
@@ -49,17 +48,21 @@ def plot_wavelet_transform(time_series, wavelet_select):
     
     return fig
 
-st.session_state
-st.session_state.final_dataframe.empty
+def new_method_start():
+    st.session_state
+    st.session_state.final_dataframe.empty
 
-if not st.session_state.final_dataframe.empty:
-    time_series = st.session_state.final_dataframe
-else:
-    st.warning('Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»')
-    st.stop()
+    if not st.session_state.final_dataframe.empty:
+        time_series = st.session_state.final_dataframe
+    else:
+        st.warning('Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»')
+        st.stop()
+    df_chart_display_iloc(time_series)
+    return time_series
+
+time_series = new_method_start()
 
 
-df_chart_display_iloc(time_series)
 wavelet_select = st.sidebar.selectbox(label='Выберите материнский вейвлет', options=(["", "Морле", "Гаусс", "Мексиканская шляпа"]))
 
 # st.stop()

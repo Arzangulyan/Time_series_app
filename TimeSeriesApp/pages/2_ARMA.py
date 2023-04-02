@@ -1,15 +1,45 @@
 import streamlit as st
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pywt
+import matplotlib.pyplot as plt
+import seaborn as sns
+import altair as alt
+from numpy.fft import fft
+from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.arima.model import ARIMA
+
+st.set_page_config(page_title="ARMA")
 
 st.title("Прогнозирование временных рядов с использованием ARMA")
 
-uploaded_file = st.file_uploader("Загрузите файл CSV с данными временных рядов", type="csv")
+# uploaded_file = st.file_uploader("Загрузите файл CSV с данными временных рядов", type="csv")
 
-if uploaded_file is not None:
-    data = pd.read_csv(uploaded_file, parse_dates=True, index_col=0)
-    st.write("Ваши загруженные данные:")
+def df_chart_display_iloc(df):
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(df)
+    with col2:
+        st.line_chart(df.iloc[:, 1])
+
+def new_method_start():
+    st.session_state
+    st.session_state.final_dataframe.empty
+
+    if not st.session_state.final_dataframe.empty:
+        time_series = st.session_state.final_dataframe
+    else:
+        st.warning('Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»')
+        st.stop()
+    'Загруженный ряд'
+    df_chart_display_iloc(time_series)
+    return time_series
+
+
+time_series = new_method_start()
+
+if time_series is not None:
+    data = time_series.iloc[:, 1]
     st.line_chart(data)
 
     st.sidebar.title("Параметры модели ARMA")
@@ -21,7 +51,7 @@ if uploaded_file is not None:
         st.write(f"Оценка AIC для модели ARMA({p}, {q}): {model.aic}")
 
         forecast_steps = st.sidebar.number_input(
-            "Количество шагов прогнозирования в будущее", 1, 100, 5
+            "Количество шагов прогнозирования в будущее", min_value=1, value=5
         )
         forecast = model.forecast(steps=forecast_steps)
 
