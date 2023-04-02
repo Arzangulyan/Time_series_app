@@ -49,8 +49,12 @@ def plot_wavelet_transform(time_series, wavelet_select):
     
     return fig
 
+if not st.session_state.final_dataframe.empty:
+    time_series = st.session_state.final_dataframe
+else:
+    st.write('Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»')
+    st.stop
 
-time_series = st.session_state.final_dataframe
 
 df_chart_display_iloc(time_series)
 wavelet_select = st.sidebar.selectbox(label='Выберите материнский вейвлет', options=(["", "Морле", "Гаусс", "Мексиканская шляпа"]))
