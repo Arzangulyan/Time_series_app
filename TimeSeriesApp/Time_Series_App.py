@@ -48,9 +48,15 @@ def df_chart_display_iloc(df, start, end, data_col_iloc):
     st.write(df.loc[start:end])
     st.line_chart(df.iloc[start:end, data_col_iloc])
 
+if "final_dataframe" not in st.session_state:
+    st.session_state.final_dataframe = None
+
+
 # trigonometric_args = [S_1_coef, S_1_freq, S_2_coef, S_2_freq, S_3_coef, S_3_freq, C_1_coef, C_1_freq, C_2_coef, C_2_freq, C_3_coef, C_3_freq]
 
 st.title("Комплекс для работы с временными рядами")
+
+st.session_state
 
 # df = pd.read_csv("/Users/arzangulyan/Documents/Научка/Vietnam_CO2_Temp.csv")
 # st.line_chart(df['Temperature'])
@@ -60,7 +66,17 @@ time_series = None
 #Выбор типа данных
 type_of_data = ["", "Искусственный ряд", "Загруженный ряд"]
 data_radio = st.sidebar.selectbox ("Выберите данные для обработки", type_of_data)
-nothing_selected (data_radio)
+
+# if time_series == None:
+#     nothing_selected (data_radio)
+
+if data_radio == "":
+    if st.session_state.final_dataframe.empty:
+        st.write("NO final dataframe found")
+        # st.sidebar.write('Ожидается ответ от пользователя...')
+        st.stop()
+    else: 
+        time_series = st.session_state.final_dataframe
 
 
 if data_radio == 'Загруженный ряд':
@@ -154,7 +170,7 @@ else:
         st.line_chart(time_series_selected.iloc[start_point:end_point, 1])
     
     time_series_selected[value_select] = time_series_selected['Усредненный']
-    time_series_selected
+    del time_series_selected['Усредненный']
 
 
 stationar_test_checkbox = st.sidebar.checkbox("Тест на стационарность", key="stat_test_checkbox")
@@ -164,10 +180,6 @@ if stationar_test_checkbox:
     if stat_test_res < 0.05: st.sidebar.write("Ряд стационарен по критерию 5%")
     else: st.sidebar.write("Ряд НЕ стационарен по критерию 5%")
 
-del time_series_selected['Усредненный']
-
-if "final_dataframe" not in st.session_state:
-    st.session_state.final_dataframe = pd.DataFrame()
 
 st.session_state.final_dataframe = time_series_selected
 st.session_state
