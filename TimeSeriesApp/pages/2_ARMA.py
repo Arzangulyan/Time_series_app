@@ -43,8 +43,8 @@ if time_series is not None:
     st.line_chart(data)
 
     st.sidebar.title("Параметры модели ARMA")
-    p = st.sidebar.slider("Параметр AR (p)", 1, 10, 1)
-    q = st.sidebar.slider("Параметр MA (q)", 1, 10, 1)
+    p = st.sidebar.number_input("Параметр AR (p)", min_value=1)
+    q = st.sidebar.number_input("Параметр MA (q)", min_value=1)
 
     try:
         model = ARIMA(data, order=(p, 0, q)).fit()
