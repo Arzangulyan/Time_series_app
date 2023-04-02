@@ -72,7 +72,7 @@ data_radio = st.sidebar.selectbox ("Выберите данные для обр�
 
 if data_radio == "":
     if st.session_state.final_dataframe.empty:
-        st.write("NO final dataframe found")
+        st.warning("No dataframe found")
         # st.sidebar.write('Ожидается ответ от пользователя...')
         st.stop()
     else: 
