@@ -15,12 +15,14 @@ st.title("Прогнозирование временных рядов с исп
 
 # uploaded_file = st.file_uploader("Загрузите файл CSV с данными временных рядов", type="csv")
 
+
 def df_chart_display_iloc(df):
     col1, col2 = st.columns(2)
     with col1:
         st.write(df)
     with col2:
         st.line_chart(df.iloc[:, 1])
+
 
 def new_method_start():
     st.session_state
@@ -29,9 +31,11 @@ def new_method_start():
     if not st.session_state.final_dataframe.empty:
         time_series = st.session_state.final_dataframe
     else:
-        st.warning('Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»')
+        st.warning(
+            "Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»"
+        )
         st.stop()
-    'Загруженный ряд'
+    "Загруженный ряд"
     df_chart_display_iloc(time_series)
     return time_series
 
@@ -41,6 +45,8 @@ time_series = new_method_start()
 if time_series is not None:
     data = time_series.iloc[:, 1]
     st.line_chart(data)
+
+    len(data)
 
     st.sidebar.title("Параметры модели ARMA")
     p = st.sidebar.number_input("Параметр AR (p)", min_value=1)
