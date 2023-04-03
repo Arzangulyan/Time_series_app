@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import functions_morfology as f
 import sys
 import heapq
-sys.path.insert(0, '/Users/arzangulyan/Documents/Научка/Vesna2022/Programming/Attempt_1/Bizin_morfology/functions_morfology.py')
+sys.path.insert(0, 'TimeSeriesApp/functions_morfology.py')
 
 ##Monotonus numeric
 
