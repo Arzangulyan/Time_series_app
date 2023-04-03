@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import functions as f
+import functions_morfology as f
 import heapq
 
 
@@ -56,7 +56,6 @@ ax1.plot(x[infl_p], APPROXIMATION[infl_p], 'go', markersize=5, label='inflection
 ax1.set_xlabel("Time (1 tick = 30 min)")
 ax1.set_ylabel("CO2 concentration")
 legend1 = ax1.legend(loc='best', shadow=True, fontsize='large')
-
 plt.show()
 
 '''

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import functions as f
+import functions_morfology as f
 import heapq
 
 
@@ -15,10 +15,9 @@ df = pd.read_excel('/Users/arzangulyan/Documents/Научка/Vesna2022/Programm
 print("data import complete")
 y = np.array(df.S1CO2)[11:200]
 x = np.array(df.index)[11:200]
-size = len(x)
 x = x-x[0]
 
-
+size = len(x)
 form_parameters = np.linspace(0, size, size*2//period + 1, dtype=int)
 inner_cycle = 2 * delta + 1
 outer_cycle = len(form_parameters) - 2
