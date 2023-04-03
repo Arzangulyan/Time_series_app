@@ -54,7 +54,8 @@ if time_series is not None:
 
     try:
         model = ARIMA(data, order=(p, 0, q)).fit()
-        st.write(f"Оценка AIC для модели ARMA({p}, {q}): {model.aic}")
+        #ПОКА НЕ РАЗБЕРУСЬ, НЕ ВОЗВРАЩАТЬ ЭТО В КОД
+        # st.write(f"Оценка AIC для модели ARMA({p}, {q}): {model.aic}")
 
         forecast_steps = st.sidebar.number_input(
             "Количество шагов прогнозирования в будущее", min_value=1, value=5
