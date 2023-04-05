@@ -97,8 +97,9 @@ if "final_dataframe" not in st.session_state:
 # trigonometric_args = [S_1_coef, S_1_freq, S_2_coef, S_2_freq, S_3_coef, S_3_freq, C_1_coef, C_1_freq, C_2_coef, C_2_freq, C_3_coef, C_3_freq]
 
 st.title("Комплекс для работы с временными рядами")
+st.sidebar.header("Первичная обработка ряда")
 
-st.session_state
+# st.session_state
 with st.expander("Что делать, если нет своего ряда?"):
     sample_csv_download_button()
 
@@ -116,7 +117,7 @@ data_radio = st.sidebar.selectbox("Выберите данные для обра
 
 if data_radio == "":
     if st.session_state.final_dataframe.empty:
-        st.warning("No dataframe found")
+        st.warning("Отсутствует ряд для анализа")
         # st.sidebar.write('Ожидается ответ от пользователя...')
         st.stop()
     else:

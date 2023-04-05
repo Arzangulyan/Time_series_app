@@ -12,7 +12,7 @@ from statsmodels.tsa.arima.model import ARIMA
 st.set_page_config(page_title="ARMA")
 
 st.title("Прогнозирование временных рядов с использованием ARMA")
-
+st.sidebar.header("Настройки ARMA")
 # uploaded_file = st.file_uploader("Загрузите файл CSV с данными временных рядов", type="csv")
 
 
@@ -25,8 +25,8 @@ def df_chart_display_iloc(df):
 
 
 def new_method_start():
-    st.session_state
-    st.session_state.final_dataframe.empty
+    # st.session_state
+    # st.session_state.final_dataframe.empty
 
     if not st.session_state.final_dataframe.empty:
         time_series = st.session_state.final_dataframe

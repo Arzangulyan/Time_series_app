@@ -9,8 +9,9 @@ from numpy.fft import fft
 from statsmodels.tsa.stattools import adfuller
 
 st.set_page_config(page_title="Wavelets")
+st.title("Выделение сезонностей во временных рядах с помощью Вейвлет преобразования")
 
-st.sidebar.header("Wavelets settings")
+st.sidebar.header("Настройки вейвлетов")
 
 def df_chart_display_iloc(df):
     col1, col2 = st.columns(2)
@@ -49,8 +50,8 @@ def plot_wavelet_transform(time_series, wavelet_select):
     return fig
 
 def new_method_start():
-    st.session_state
-    st.session_state.final_dataframe.empty
+    # st.session_state
+    # st.session_state.final_dataframe.empty
 
     if not st.session_state.final_dataframe.empty:
         time_series = st.session_state.final_dataframe

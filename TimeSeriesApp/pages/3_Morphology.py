@@ -10,7 +10,8 @@ sys.path.insert(0, 'TimeSeriesApp/functions_morfology.py')
 ##Monotonus numeric
 
 st.set_page_config(page_title="Morphology")
-st.sidebar.header("Morphology settings")
+st.title("Моделирование временных рядов с помощью морфологического анализа")
+st.sidebar.header("Настройки морфологии")
 
 def df_chart_display_iloc(df):
     col1, col2 = st.columns(2)
@@ -20,8 +21,8 @@ def df_chart_display_iloc(df):
         st.line_chart(df.iloc[:, 1])
 
 def new_method_start():
-    st.session_state
-    st.session_state.final_dataframe.empty
+    # st.session_state
+    # st.session_state.final_dataframe.empty
 
     if not st.session_state.final_dataframe.empty:
         time_series = st.session_state.final_dataframe

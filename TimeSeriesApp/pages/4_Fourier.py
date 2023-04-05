@@ -8,8 +8,9 @@ from numpy.fft import fft
 from statsmodels.tsa.stattools import adfuller
 
 st.set_page_config(page_title="Fast Fourier Transform")
+st.title("Выделение сезонностей во временных рядах с помощью Быстрого Фурье Преобразования")
 
-st.sidebar.header("Fourier settings")
+st.sidebar.header("Настройки Фурье преобразования")
 
 def df_chart_display_iloc(df):
     col1, col2 = st.columns(2)
@@ -20,8 +21,8 @@ def df_chart_display_iloc(df):
 
 
 def new_method_start():
-    st.session_state
-    st.session_state.final_dataframe.empty
+    # st.session_state
+    # st.session_state.final_dataframe.empty
 
     if not st.session_state.final_dataframe.empty:
         time_series = st.session_state.final_dataframe
