@@ -43,13 +43,14 @@ def plot_fft_plus_power(time, signal):
     N = len(signal)
     fs = 1/dt
 
-    fig, ax = plt.subplots(figsize=(15, 3))
+    # fig, ax = plt.subplots(figsize=(5, 3))
+    fig, ax = plt.subplots()
     variance = np.std(signal)**2
     f_values, fft_values = get_fft_values(signal, dt, N, fs)
     fft_power = variance * abs(fft_values) ** 2     # FFT power spectrum
     ax.plot(f_values, fft_values, 'r-', label='Фурье преобразование')
     ax.plot(f_values, fft_power, 'k--', linewidth=1, label='FFT Power Spectrum')
-    ax.set_xlabel('Частота [Hz / year]', fontsize=18)
+    ax.set_xlabel('Частота', fontsize=18)
     ax.set_ylabel('Амплитуда', fontsize=18)
     ax.legend()
     st.pyplot(fig)
