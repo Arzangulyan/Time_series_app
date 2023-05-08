@@ -72,6 +72,21 @@ def df_chart_display_iloc(df, data_col_iloc):
     st.write(df.iloc[:])
     st.line_chart(df.iloc[:, data_col_iloc])
 
+def sample_csv_download_button():
+    with st.expander("Что делать, если нет своего ряда?"):
+
+        def convert_df(df):
+            # IMPORTANT: Cache the conversion to prevent computation on every rerun
+            return df.to_csv().encode("utf-8")
+
+        convert_df(pd.read_csv("Vietnam_CO2_Temp.csv").iloc[:, 2:])
+        st.write("Настоящий ряд для тестирования можно скачать тут")
+        st.download_button(
+            label="Download data as CSV",
+            data=convert_df(pd.read_csv("Vietnam_CO2_Temp.csv")),
+            file_name="Vietnam.csv",
+            # mime='text/csv',
+        )
 
 # @st.cache_data
 
@@ -88,7 +103,7 @@ st.sidebar.header("Выбор временного ряда для обрабо�
 txt.intro_text()
 
 # st.session_state
-txt.sample_csv_download_button()
+sample_csv_download_button()
 
 # df = pd.read_csv("/Users/arzangulyan/Documents/Научка/Vietnam_CO2_Temp.csv")
 # st.line_chart(df['Temperature'])
