@@ -8,6 +8,8 @@ import altair as alt
 from numpy.fft import fft
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.stattools import acf, pacf
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 
 st.set_page_config(page_title="ARMA")
 
@@ -42,29 +44,56 @@ def new_method_start():
 
 time_series = new_method_start()
 
-if time_series is not None:
-    data = time_series.iloc[:, 1]
-    st.line_chart(data)
 
-    len(data)
+# if time_series is not None:
+data = time_series.iloc[:, 1]
 
-    st.sidebar.title("Параметры модели ARMA")
-    p = st.sidebar.number_input("Параметр AR (p)", min_value=1)
-    q = st.sidebar.number_input("Параметр MA (q)", min_value=1)
+# Вычисление значений ACF и PACF
+acf_values = acf(data)
+pacf_values = pacf(data)
 
-    try:
-        model = ARIMA(data, order=(p, 0, q)).fit()
-        # ПОКА НЕ РАЗБЕРУСЬ, НЕ ВОЗВРАЩАТЬ ЭТО В КОД
-        # st.write(f"Оценка AIC для модели ARMA({p}, {q}): {model.aic}")
+# Создание датафреймов для ACF и PACF
+acf_df = pd.DataFrame({'Lag': np.arange(len(acf_values)), 'Value': acf_values})
+pacf_df = pd.DataFrame({'Lag': np.arange(len(pacf_values)), 'Value': pacf_values})
 
-        forecast_steps = st.sidebar.number_input(
-            "Количество шагов прогнозирования в будущее", min_value=1, value=5
-        )
-        forecast = model.forecast(steps=forecast_steps)
+# Построение графиков ACF и PACF с использованием Altair
+acf_chart = alt.Chart(acf_df).mark_bar().encode(
+    x='Lag',
+    y='Value',
+).properties(title='Autocorrelation Function (ACF)')
 
-        st.write("Прогноз временного ряда:")
-        st.line_chart(pd.concat([data, forecast]))
+pacf_chart = alt.Chart(pacf_df).mark_bar().encode(
+    x='Lag',
+    y='Value',
+).properties(title='Partial Autocorrelation Function (PACF)')
 
-    except ValueError as e:
-        st.write("Не удалось обучить модель ARMA. Проверьте параметры и данные.")
-        st.write("Ошибка:", e)
+st.altair_chart(acf_chart)
+st.altair_chart(pacf_chart)
+
+st.line_chart(data)
+
+
+# len(data)
+
+
+st.sidebar.title("Параметры модели ARMA")
+p = st.sidebar.number_input("Параметр AR (p)", min_value=1)
+q = st.sidebar.number_input("Параметр MA (q)", min_value=1)
+
+
+try:
+    model = ARIMA(data, order=(p, 0, q)).fit()
+    # ПОКА НЕ РАЗБЕРУСЬ, НЕ ВОЗВРАЩАТЬ ЭТО В КОД
+    # st.write(f"Оценка AIC для модели ARMA({p}, {q}): {model.aic}")
+
+    forecast_steps = st.sidebar.number_input(
+        "Количество шагов прогнозирования в будущее", min_value=1, value=5
+    )
+    forecast = model.forecast(steps=forecast_steps)
+
+    st.write("Прогноз временного ряда:")
+    st.line_chart(pd.concat([data, forecast]))
+
+except ValueError as e:
+    st.write("Не удалось обучить модель ARMA. Проверьте параметры и данные.")
+    st.write("Ошибка:", e)
