@@ -1,4 +1,3 @@
-
 def cwt():
     # #TEST
     # x = np.linspace(0, 1000,1000)
@@ -26,11 +25,15 @@ def cwt():
     # # Intergral_spectrum = st.line_chart(I_s)
     # #TEST
 
-    #REAL
+    # REAL
 
-    coef, freqs = pywt.cwt(df_selected.loc[(start_point+m_a_step):end_point, 'Averaged'], np.arange(1, T_s_len/4), mother_switcher.get(wavelet_select))
+    coef, freqs = pywt.cwt(
+        df_selected.loc[(start_point + m_a_step) : end_point, "Averaged"],
+        np.arange(1, T_s_len / 4),
+        mother_switcher.get(wavelet_select),
+    )
     fig1, ax1 = plt.subplots()
-    ax1.imshow(coef, cmap = 'copper', aspect = 'auto')
+    ax1.imshow(coef, cmap="copper", aspect="auto")
     # sns.heatmap(coef, ax = ax, cmap = 'copper')
     # st.write(fig)
     ax1.set_title("Power Spectrum", fontsize=20)
@@ -38,8 +41,6 @@ def cwt():
     ax1.set_xlabel("Время", fontsize=18)
     ax1.invert_yaxis()
     st.pyplot(fig1)
-
-
 
     # I = np.empty((len(freqs)))
     # for j in range(len(freqs)-1):
@@ -53,4 +54,4 @@ def cwt():
     # ax2.set_aspect('auto')
     # plt.xscale("log")
     # st.pyplot(fig2)
-    #REAL
+    # REAL
