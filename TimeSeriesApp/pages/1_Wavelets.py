@@ -13,6 +13,7 @@ st.title("Выделение сезонностей во временных ря
 
 st.sidebar.header("Настройки вейвлетов")
 
+
 def df_chart_display_iloc(df):
     col1, col2 = st.columns(2)
     with col1:
@@ -20,34 +21,39 @@ def df_chart_display_iloc(df):
     with col2:
         st.line_chart(df.iloc[:, 1])
 
+
 def wavelet_transform(time_series, mother_wavelet):
-    mother_switcher = {
-    "Морле": "morl",
-    "Гаусс": "gaus1",
-    "Мексиканская шляпа": "mexh"
-}
+    mother_switcher = {"Морле": "morl", "Гаусс": "gaus1", "Мексиканская шляпа": "mexh"}
     n_samples = len(time_series.iloc[:, 1])
     scales = np.logspace(0, np.log10(n_samples / 4), num=n_samples // 4)
 
-    coef, freqs = pywt.cwt(time_series.iloc[:, 1], scales, mother_switcher.get(mother_wavelet))
-    
+    coef, freqs = pywt.cwt(
+        time_series.iloc[:, 1], scales, mother_switcher.get(mother_wavelet)
+    )
+
     return coef, freqs
 
-
     # coef, freqs = pywt.cwt(time_series.iloc[:, 1], np.arange(1, len(time_series)/4), mother_switcher.get(mother_wavelet))
-    # return coef, freqs 
+    # return coef, freqs
+
 
 def plot_wavelet_transform(time_series, wavelet_select):
     coef, freq = wavelet_transform(time_series, wavelet_select)
-    
+
     fig, ax = plt.subplots()
-    ax.imshow(coef, cmap='copper', aspect='auto', extent=[0, len(time_series.iloc[:, 1]), freq[-1], freq[0]])
+    ax.imshow(
+        coef,
+        cmap="copper",
+        aspect="auto",
+        extent=[0, len(time_series.iloc[:, 1]), freq[-1], freq[0]],
+    )
     ax.set_title("Power Spectrum", fontsize=20)
     ax.set_ylabel("Период", fontsize=18)
     ax.set_xlabel("Время", fontsize=18)
     ax.invert_yaxis()
-    
+
     return fig
+
 
 def new_method_start():
     # st.session_state
@@ -56,15 +62,21 @@ def new_method_start():
     if not st.session_state.final_dataframe.empty:
         time_series = st.session_state.final_dataframe
     else:
-        st.warning('Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»')
+        st.warning(
+            "Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»"
+        )
         st.stop()
     df_chart_display_iloc(time_series)
     return time_series
 
+
 time_series = new_method_start()
 
 
-wavelet_select = st.sidebar.selectbox(label='Выберите материнский вейвлет', options=(["", "Морле", "Гаусс", "Мексиканская шляпа"]))
+wavelet_select = st.sidebar.selectbox(
+    label="Выберите материнский вейвлет",
+    options=(["", "Морле", "Гаусс", "Мексиканская шляпа"]),
+)
 
 # st.stop()
 if wavelet_select == "":
@@ -96,7 +108,7 @@ if wavelet_select == "":
 # # Intergral_spectrum = st.line_chart(I_s)
 # #TEST
 
-#REAL
+# REAL
 
 # coef, freq = wavelet_transform(time_series, wavelet_select)
 # fig1, ax1 = plt.subplots()
@@ -113,7 +125,6 @@ fig1 = plot_wavelet_transform(time_series, wavelet_select)
 st.pyplot(fig1)
 
 
-
 # I = np.empty((len(freqs)))
 # for j in range(len(freqs)-1):
 #     for i in range(len(df_selected.loc[(start_point+m_a_step):end_point, 'Averaged'])-1):
@@ -126,4 +137,4 @@ st.pyplot(fig1)
 # ax2.set_aspect('auto')
 # plt.xscale("log")
 # st.pyplot(fig2)
-#REAL
+# REAL

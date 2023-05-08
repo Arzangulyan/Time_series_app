@@ -8,6 +8,7 @@ import altair as alt
 from numpy.fft import fft
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+import App_descriptions_streamlit as txt
 
 from random import gauss
 
@@ -75,33 +76,19 @@ def df_chart_display_iloc(df, data_col_iloc):
 # @st.cache_data
 
 
-def sample_csv_download_button():
-    def convert_df(df):
-        # IMPORTANT: Cache the conversion to prevent computation on every rerun
-        return df.to_csv().encode("utf-8")
-
-    convert_df(pd.read_csv("Vietnam_CO2_Temp.csv").iloc[:, 2:])
-    "Настоящий ряд для тестирования можно скачать тут"
-    st.download_button(
-        label="Download data as CSV",
-        data=convert_df(pd.read_csv("Vietnam_CO2_Temp.csv")),
-        file_name="Vietnam.csv",
-        # mime='text/csv',
-    )
-
-
 if "final_dataframe" not in st.session_state:
     st.session_state.final_dataframe = pd.DataFrame(None)
 
 
 # trigonometric_args = [S_1_coef, S_1_freq, S_2_coef, S_2_freq, S_3_coef, S_3_freq, C_1_coef, C_1_freq, C_2_coef, C_2_freq, C_3_coef, C_3_freq]
 
-st.title("Комплекс для работы с временными рядами")
+st.title("Комплекс для работы с временными ря дами")
 st.sidebar.header("Первичная обработка ряда")
 
+txt.intro_text()
+
 # st.session_state
-with st.expander("Что делать, если нет своего ряда?"):
-    sample_csv_download_button()
+txt.sample_csv_download_button()
 
 # df = pd.read_csv("/Users/arzangulyan/Documents/Научка/Vietnam_CO2_Temp.csv")
 # st.line_chart(df['Temperature'])
@@ -236,11 +223,9 @@ else:
     )
     st.write("Шаг скользящего среднего: ", MA_step, value=1)
     # time_series_avg = time_series_selected.loc[start_point:end_point].rolling(window=MA_step, min_periods=1).mean()
-    time_series_selected_limited["Усредненный"] = (
-        time_series_selected_limited
-        .rolling(window=MA_step, min_periods=1)
-        .mean()
-    )
+    time_series_selected_limited["Усредненный"] = time_series_selected_limited.rolling(
+        window=MA_step, min_periods=1
+    ).mean()
 
     compare_dframe = st.dataframe(time_series_selected_limited)
 
@@ -248,15 +233,15 @@ else:
     with col1:
         "Усредненный ряд"
         dframe_chart_MA = st.line_chart(
-            time_series_selected_limited.loc[
-                MA_step:, ["Усредненный"]
-            ]
+            time_series_selected_limited.loc[MA_step:, ["Усредненный"]]
         )
     with col2:
         "Исходный ряд"
         st.line_chart(time_series_selected_limited.iloc[:, 1])
 
-    time_series_selected_limited[value_select] = time_series_selected_limited["Усредненный"]
+    time_series_selected_limited[value_select] = time_series_selected_limited[
+        "Усредненный"
+    ]
     del time_series_selected_limited["Усредненный"]
 
 
@@ -264,9 +249,7 @@ stationar_test_checkbox = st.sidebar.checkbox(
     "Тест на стационарность", key="stat_test_checkbox"
 )
 if stationar_test_checkbox:
-    stat_test_res = adfuller(
-        time_series_selected_limited.iloc[MA_step:, -1]
-    )[1]
+    stat_test_res = adfuller(time_series_selected_limited.iloc[MA_step:, -1])[1]
     st.sidebar.write("Результаты теста на стационарность (p-value): ", stat_test_res)
     if stat_test_res < 0.05:
         st.sidebar.write("Ряд стационарен по критерию 5%")
