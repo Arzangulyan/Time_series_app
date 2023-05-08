@@ -80,9 +80,14 @@ st.sidebar.title("Параметры модели ARMA")
 p = st.sidebar.number_input("Параметр AR (p)", min_value=1)
 q = st.sidebar.number_input("Параметр MA (q)", min_value=1)
 
+@st.cache_data
+def arma_proccesing(data, p, q):
+    model = ARIMA(data, order=(p, 0, q)).fit()
+    return model
 
 try:
-    model = ARIMA(data, order=(p, 0, q)).fit()
+    # model = ARIMA(data, order=(p, 0, q)).fit()
+    model = arma_proccesing(data, p, q) 
     # ПОКА НЕ РАЗБЕРУСЬ, НЕ ВОЗВРАЩАТЬ ЭТО В КОД
     # st.write(f"Оценка AIC для модели ARMA({p}, {q}): {model.aic}")
 
