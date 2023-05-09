@@ -53,19 +53,29 @@ acf_values = acf(data)
 pacf_values = pacf(data)
 
 # Создание датафреймов для ACF и PACF
-acf_df = pd.DataFrame({'Lag': np.arange(len(acf_values)), 'Value': acf_values})
-pacf_df = pd.DataFrame({'Lag': np.arange(len(pacf_values)), 'Value': pacf_values})
+acf_df = pd.DataFrame({"Lag": np.arange(len(acf_values)), "Value": acf_values})
+pacf_df = pd.DataFrame({"Lag": np.arange(len(pacf_values)), "Value": pacf_values})
 
 # Построение графиков ACF и PACF с использованием Altair
-acf_chart = alt.Chart(acf_df).mark_bar().encode(
-    x='Lag',
-    y='Value',
-).properties(title='Autocorrelation Function (ACF)')
+acf_chart = (
+    alt.Chart(acf_df)
+    .mark_bar()
+    .encode(
+        x="Lag",
+        y="Value",
+    )
+    .properties(title="Autocorrelation Function (ACF)")
+)
 
-pacf_chart = alt.Chart(pacf_df).mark_bar().encode(
-    x='Lag',
-    y='Value',
-).properties(title='Partial Autocorrelation Function (PACF)')
+pacf_chart = (
+    alt.Chart(pacf_df)
+    .mark_bar()
+    .encode(
+        x="Lag",
+        y="Value",
+    )
+    .properties(title="Partial Autocorrelation Function (PACF)")
+)
 
 st.altair_chart(acf_chart)
 st.altair_chart(pacf_chart)
@@ -80,14 +90,16 @@ st.sidebar.title("Параметры модели ARMA")
 p = st.sidebar.number_input("Параметр AR (p)", min_value=1)
 q = st.sidebar.number_input("Параметр MA (q)", min_value=1)
 
+
 @st.cache_data
 def arma_proccesing(data, p, q):
     model = ARIMA(data, order=(p, 0, q)).fit()
     return model
 
+
 try:
     # model = ARIMA(data, order=(p, 0, q)).fit()
-    model = arma_proccesing(data, p, q) 
+    model = arma_proccesing(data, p, q)
     # ПОКА НЕ РАЗБЕРУСЬ, НЕ ВОЗВРАЩАТЬ ЭТО В КОД
     # st.write(f"Оценка AIC для модели ARMA({p}, {q}): {model.aic}")
 
@@ -97,7 +109,11 @@ try:
     forecast = model.forecast(steps=forecast_steps)
 
     st.write("Прогноз временного ряда:")
-    st.line_chart(pd.concat([data, forecast]))
+    ARMA_df = pd.DataFrame()
+    # ARMA_df['Время'] = time_series.iloc[:,0]
+    ARMA_df["Прогноз"] = pd.concat([data, forecast])
+    ARMA_df["Исходные данные"] = data
+    st.line_chart(ARMA_df)
 
 except ValueError as e:
     st.write("Не удалось обучить модель ARMA. Проверьте параметры и данные.")
