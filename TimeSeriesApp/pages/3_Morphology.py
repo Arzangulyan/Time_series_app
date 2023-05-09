@@ -37,7 +37,7 @@ def new_method_start():
     df_chart_display_iloc(time_series)
     return time_series
 
-
+@st.cache_data
 def Convex_numeric(time_series, period, delta):
     y = time_series.iloc[:, 1]
     x = pd.Series(np.array(time_series.index)[:])
@@ -97,12 +97,12 @@ def Convex_numeric(time_series, period, delta):
     ax1.plot(
         x[infl_p], APPROXIMATION[infl_p], "go", markersize=5, label="inflection points"
     )
-    ax1.set_xlabel("Time (1 tick = 30 min)")
-    ax1.set_ylabel("CO2 concentration")
-    legend1 = ax1.legend(loc="best", shadow=True, fontsize="large")
+    ax1.set_xlabel("Time")
+    ax1.set_ylabel("Signal")
+    ax1.legend(loc="best", shadow=True, fontsize="small")
     return fig
 
-
+@st.cache_data
 def Monotonus_numeric(time_series, period, delta):
     y = time_series.iloc[:, 1]
     x = pd.Series(np.array(time_series.index)[:])
@@ -154,9 +154,9 @@ def Monotonus_numeric(time_series, period, delta):
     ax1.plot(
         x[infl_p], APPROXIMATION[infl_p], "go", markersize=5, label="inflection points"
     )
-    ax1.set_xlabel("Time (1 tick = 30 min)")
-    ax1.set_ylabel("CO2 concentration")
-    legend1 = ax1.legend(loc="best", shadow=True, fontsize="large")
+    ax1.set_xlabel("Time")
+    ax1.set_ylabel("Signal")
+    ax1.legend(loc="best", shadow=True, fontsize="small")
     return fig
 
 
