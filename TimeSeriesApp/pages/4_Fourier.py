@@ -62,6 +62,7 @@ def get_fft_values(y_values, T, N, f_s):
 #     ax.legend()
 #     st.pyplot(fig)
 
+
 def fft_plus_power_dataframe(time, signal):
     dt = time[1] - time[0]
     N = len(signal)
@@ -71,11 +72,14 @@ def fft_plus_power_dataframe(time, signal):
     f_values, fft_values = get_fft_values(signal, dt, N, fs)
     fft_power = variance * abs(fft_values) ** 2  # FFT power spectrum
 
-    fft_df = pd.DataFrame({"Частота": f_values, "Амплитуда": fft_values, "Тип": "Фурье преобразование"})
-    power_df = pd.DataFrame({"Частота": f_values, "Амплитуда": fft_power, "Тип": "FFT Power Spectrum"})
+    fft_df = pd.DataFrame(
+        {"Частота": f_values, "Амплитуда": fft_values, "Тип": "Фурье преобразование"}
+    )
+    power_df = pd.DataFrame(
+        {"Частота": f_values, "Амплитуда": fft_power, "Тип": "FFT Power Spectrum"}
+    )
 
     return fft_df, power_df
-
 
 
 time_series = new_method_start()
@@ -85,10 +89,6 @@ time = np.arange(0, time_series.shape[0])
 fft_df, power_df = fft_plus_power_dataframe(time, signal)
 data = pd.concat([fft_df, power_df])
 
-alt_chart = alt.Chart(data).mark_line().encode(
-    x="Частота",
-    y="Амплитуда",
-    color="Тип"
-)
+alt_chart = alt.Chart(data).mark_line().encode(x="Частота", y="Амплитуда", color="Тип")
 
 st.altair_chart(alt_chart, use_container_width=True)
