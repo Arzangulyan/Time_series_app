@@ -87,13 +87,13 @@ def plot_wavelet_transform(time_series, wavelet_select):
         extent=[time_num[0], time_num[-1], periods[-1], periods[0]],
     )
     ax.set_title("Power Spectrum", fontsize=20)
-    ax.set_ylabel("Период", fontsize=18)
+    ax.set_ylabel("Частота", fontsize=18)
     ax.set_xlabel("Время", fontsize=18)
     ax.invert_yaxis()
 
     # Разметка оси X с указанными временными метками
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%Y %H:%M'))
     fig.autofmt_xdate(rotation=45, ha='right')
 
     return fig
