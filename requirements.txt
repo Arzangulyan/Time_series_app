@@ -7,3 +7,4 @@ PyWavelets
 seaborn
 statsmodels
 streamlit
+sklearn
