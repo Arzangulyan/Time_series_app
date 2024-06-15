@@ -8,3 +8,4 @@ seaborn
 statsmodels
 streamlit
 scikit-learn
+tensorflow
