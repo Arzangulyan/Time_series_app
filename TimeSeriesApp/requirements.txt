@@ -1,9 +1,0 @@
-# altair
-# cvxpy
-# matplotlib
-# numpy
-# pandas
-# PyWavelets
-# seaborn
-# statsmodels
-# streamlit
