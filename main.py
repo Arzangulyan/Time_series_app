@@ -10,7 +10,7 @@ from modules import (
     visualization,
 )
 import App_descriptions_streamlit as txt
-from config import DATA_TYPES
+from config import DATA_TYPES, PARAM_NAMES
 
 
 # Инициализация состояния сессии
@@ -70,33 +70,20 @@ def create_synthetic_data():
 
     date_range = pd.date_range(start=start_date, end=end_date, freq="D")
 
-    param_names = [
-        "S_1_coef",
-        "S_1_freq",
-        "S_2_coef",
-        "S_2_freq",
-        "S_3_coef",
-        "S_3_freq",
-        "C_1_coef",
-        "C_1_freq",
-        "C_2_coef",
-        "C_2_freq",
-        "C_3_coef",
-        "C_3_freq",
-        "NoiseCoef",
-        "TrendSlope",
-    ]
-    st.session_state.param_dict = {name: 0.0 for name in param_names}
+    st.session_state.param_dict = {name: 0.0 for name in PARAM_NAMES}
 
     selected_params = st.sidebar.multiselect(
         "Выберите параметры для генерируемого ряда",
-        param_names,
+        PARAM_NAMES,
         default=st.session_state.selected_params,
     )
     # Обновление session_state с выбранными параметрами
     st.session_state.selected_params = selected_params
     for name in selected_params:
-        st.session_state.param_dict[name] = st.sidebar.number_input(name, value=st.session_state.param_dict[name], key=name)
+        st.session_state.param_dict[name] = st.sidebar.number_input(
+            name, value=st.session_state.param_dict.get(name, 0.0), key=name
+        )
+
     try:
         return synthetic_data.generate_synthetic_time_series(
             date_range, **st.session_state.param_dict
