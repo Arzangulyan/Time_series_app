@@ -45,10 +45,7 @@ def load_data():
 
 def create_synthetic_data():
     utils.initialize_session_state(
-        start_date=None,
-        end_date=None,
-        param_dict={},
-        selected_params=[]
+        start_date=None, end_date=None, param_dict={}, selected_params=[]
     )
     start_date = st.sidebar.date_input(
         "Дата начала",
@@ -64,7 +61,7 @@ def create_synthetic_data():
     ):
         st.sidebar.error("Пожалуйста, выберите корректные даты.")
         return None
-        
+
     if start_date >= end_date:
         st.sidebar.error("Дата начала должна быть раньше даты окончания.")
         st.stop()
@@ -72,25 +69,42 @@ def create_synthetic_data():
     st.session_state.start_date = start_date
     st.session_state.end_date = end_date
 
-
-    date_range = pd.date_range(start=st.session_state.start_date, end=st.session_state.end_date, freq="D")
+    date_range = pd.date_range(
+        start=st.session_state.start_date, end=st.session_state.end_date, freq="D"
+    )
 
     # Именно такая реализация с `default=st.session_state.selected_params if not st.session_state.selected_params else []` позволяет избегать перезапуска страницы и сделать адекватный ввод
     selected_params = st.sidebar.multiselect(
         "Выберите параметры для генерируемого ряда",
         PARAM_NAMES,
-        default=st.session_state.selected_params if not st.session_state.selected_params else []
+        default=(
+            st.session_state.selected_params
+            if not st.session_state.selected_params
+            else []
+        ),
     )
     # Обновление session_state с выбранными параметрами
     st.session_state.selected_params = selected_params
-    st.session_state.param_dict = {key: 0.0 for key in selected_params}
+    # st.session_state.param_dict = {key: 0.0 for key in selected_params}
+    # st.write(st.session_state.selected_params)
 
     for name in st.session_state.selected_params:
         st.session_state.param_dict[name] = st.sidebar.number_input(
             name, value=st.session_state.param_dict.get(name, 0.0), key=name
         )
 
+    if st.sidebar.button("Очистить значения"):
+        for name in PARAM_NAMES:
+            st.session_state.param_dict[name] = 0.
+    if st.sidebar.toggle("Автоматическое вычисление"):
+        pass
+    else:
+        if st.sidebar.button("Рассчитать"):
+            pass
+        else:
+            st.stop()
     try:
+        # st.write(st.session_state.param_dict)
         return synthetic_data.generate_synthetic_time_series(
             date_range, **st.session_state.param_dict
         )
@@ -153,7 +167,6 @@ def process_time_series(time_series):
 
     T_s_len = st.session_state.end_point - st.session_state.start_point
     st.sidebar.write("Размер выбранного диапазона:", T_s_len)
-    st.dataframe(time_series_selected_limited)
 
     MA_checkbox = st.sidebar.checkbox("Сгладить ряд", key="MA_checkbox")
     with st.sidebar.expander("Что значит «сгладить»?"):
@@ -241,7 +254,7 @@ def main():
     st.session_state.time_series = processed_time_series
 
     # Кнопка для выполнения статистического анализа
-    if st.button("Выполнить статистический анализ"):
+    if st.sidebar.button("Выполнить статистический анализ"):
         with st.spinner("Выполняется статистический анализ..."):
             st.session_state.analysis_results = (
                 time_series_analysis.perform_statistical_analysis(
@@ -272,6 +285,7 @@ def main():
             st.pyplot(fig_decomposition)
     else:
         st.warning("Статистический анализ ряда пока не проводился.")
+
 
 if __name__ == "__main__":
     main()
