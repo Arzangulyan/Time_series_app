@@ -62,7 +62,5 @@ def generate_synthetic_time_series(
     )
 
     time_series = trend + sinusoids + cosines + noise
-    print(
-        f"S_1_coef: {S_1_coef}, S_2_coef: {S_2_coef}, S_1_period: {S_1_period}, S_2_period: {S_2_period}"
-    )
+
     return pd.DataFrame({"Время": date_range, "Ряд": time_series})
