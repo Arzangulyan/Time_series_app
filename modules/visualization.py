@@ -4,13 +4,19 @@ import pandas as pd
 
 
 def df_chart_display_loc(df: pd.DataFrame, data_col_loc: str):
-    st.write(df.loc[:])
-    st.line_chart(df.loc[:, data_col_loc])
+    col1, col2 = st.columns([0.3, 0.7])
+    with col1:
+        st.write(df.loc[:])
+    with col2:
+        st.line_chart(df.loc[:, data_col_loc])
 
 
 def df_chart_display_iloc(df: pd.DataFrame, data_col_iloc: int):
-    st.write(df.iloc[:])
-    st.line_chart(df.iloc[:, data_col_iloc])
+    col1, col2 = st.columns([0.3, 0.7])
+    with col1:
+        st.write(df.iloc[:])
+    with col2:
+        st.line_chart(df.iloc[:, data_col_iloc])
 
 
 def plot_statistical_analysis(analysis_results):
