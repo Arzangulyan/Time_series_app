@@ -3,7 +3,7 @@ import pandas as pd
 from typing import Any, List, Union
 
 
-def nothing_selected_sidebar(widget: Any) -> None:
+def nothing_selected(widget: Any) -> None:
     """
     Останавливает выполнение, если виджет не выбран.
 
