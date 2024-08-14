@@ -4,28 +4,13 @@ import pandas as pd
 import App_descriptions_streamlit as txt
 from modules.lstm_module import LSTM_ts, calculate_metrics
 from modules.utils import nothing_selected
-from modules.page_template import setup_page, load_time_series, display_data
+from modules.page_template import setup_page, load_time_series, display_data, run_calculations_on_button_click
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, module="keras")
 
-
-def main():
-    setup_page("LSTM", "Настройки модели LSTM")
-    txt.LSTM_descr()
-
-    time_series = load_time_series()
-
-    epochs = int(st.sidebar.number_input("Количество эпох", min_value=1, value=10))
-    forecast_periods = int(
-        st.sidebar.number_input(
-            "Количество периодов для прогноза", min_value=1, value=1
-        )
-    )
-    txt.LSTM_epochs_choice()
-
-    signal = time_series.iloc[:, 0]
-    data, train_plot, test_plot, future_plot = LSTM_ts(signal, epochs, forecast_periods)
+def LSTM_run(time_series, epochs, forecast_periods):
+    data, train_plot, test_plot, future_plot = LSTM_ts(time_series.iloc[:, 0], epochs, forecast_periods)
 
     results_df = pd.DataFrame(
         {
@@ -59,6 +44,22 @@ def main():
         st.dataframe(future_predictions)
     else:
         st.write("Нет прогнозов на будущие периоды.")
+
+def main():
+    setup_page("LSTM", "Настройки модели LSTM")
+    txt.LSTM_descr()
+
+    time_series = load_time_series()
+
+    epochs = int(st.sidebar.number_input("Количество эпох", min_value=1, value=10))
+    forecast_periods = int(
+        st.sidebar.number_input(
+            "Количество периодов для прогноза", min_value=1, value=1
+        )
+    )
+    txt.LSTM_epochs_choice()
+
+    run_calculations_on_button_click(LSTM_run, time_series, epochs, forecast_periods)
 
 
 if __name__ == "__main__":
