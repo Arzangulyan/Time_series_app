@@ -45,41 +45,47 @@ def load_data():
 
 def create_synthetic_data():
     utils.initialize_session_state(
-        start_date=None, end_date=None, param_dict={}, selected_params=[]
+        start_date=None,
+        end_date=None,
+        param_dict={},
+        selected_params=[]
     )
     start_date = st.sidebar.date_input(
         "Дата начала",
-        value=st.session_state.start_date if st.session_state.start_date else "today",
+        value=st.session_state.start_date if st.session_state.start_date else None,
     )
     end_date = st.sidebar.date_input(
         "Дата окончания",
-        value=st.session_state.end_date if st.session_state.end_date else "today",
+        value=st.session_state.end_date if st.session_state.end_date else None,
     )
-    st.session_state.start_date = start_date
-    st.session_state.end_date = end_date
 
     if not isinstance(start_date, datetime.date) or not isinstance(
         end_date, datetime.date
     ):
         st.sidebar.error("Пожалуйста, выберите корректные даты.")
         return None
-
+        
     if start_date >= end_date:
         st.sidebar.error("Дата начала должна быть раньше даты окончания.")
         st.stop()
 
-    date_range = pd.date_range(start=start_date, end=end_date, freq="D")
+    st.session_state.start_date = start_date
+    st.session_state.end_date = end_date
 
-    st.session_state.param_dict = {name: 0.0 for name in PARAM_NAMES}
 
+    date_range = pd.date_range(start=st.session_state.start_date, end=st.session_state.end_date, freq="D")
+
+    # Именно такая реализация с `default=st.session_state.selected_params if not st.session_state.selected_params else []` позволяет избегать перезапуска страницы и сделать адекватный ввод
     selected_params = st.sidebar.multiselect(
         "Выберите параметры для генерируемого ряда",
         PARAM_NAMES,
-        default=st.session_state.selected_params,
+        default=st.session_state.selected_params if not st.session_state.selected_params else []
     )
     # Обновление session_state с выбранными параметрами
     st.session_state.selected_params = selected_params
-    for name in selected_params:
+    st.session_state.param_dict = {key: 0.0 for key in selected_params}
+
+    for name in st.session_state.selected_params:
         st.session_state.param_dict[name] = st.sidebar.number_input(
             name, value=st.session_state.param_dict.get(name, 0.0), key=name
         )
@@ -120,8 +126,8 @@ def process_time_series(time_series):
 
     date_column_select = st.session_state.date_column_select
     value_select = st.session_state.value_select
-    utils.nothing_selected_sidebar(date_column_select)
-    utils.nothing_selected_sidebar(value_select)
+    utils.nothing_selected(date_column_select)
+    utils.nothing_selected(value_select)
 
     time_series_selected = time_series.loc[:, [date_column_select, value_select]]
     time_series_selected = time_series_selected.rename(
@@ -217,14 +223,20 @@ def main():
         st.experimental_rerun()
 
     # Загрузка или создание временного ряда
-    utils.nothing_selected_sidebar(data_radio)
+    utils.nothing_selected(data_radio)
     if st.session_state.data_radio == "Загруженный ряд":
         st.session_state.time_series = load_data()
     elif st.session_state.data_radio == "Искусственный ряд":
         st.session_state.time_series = create_synthetic_data()
-
+    else:
+        st.sidebar.warning("Ожидается ввод пользователя")
+        st.stop()
+    if st.session_state.time_series is not None:
+        st.success("Временной ряд успешно загружен!")
+    else:
+        st.warning("Небходимо загрузить или сгенерировать временной ряд!.")
+        st.stop()
     # Обработка временного ряда
-    st.success("Временной ряд успешно загружен!")
     processed_time_series = process_time_series(st.session_state.time_series)
     st.session_state.time_series = processed_time_series
 
@@ -260,7 +272,6 @@ def main():
             st.pyplot(fig_decomposition)
     else:
         st.warning("Статистический анализ ряда пока не проводился.")
-
 
 if __name__ == "__main__":
     main()
