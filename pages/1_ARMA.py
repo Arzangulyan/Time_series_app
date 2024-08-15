@@ -12,6 +12,8 @@ from modules.page_template import (
     load_time_series,
     run_calculations_on_button_click,
 )
+from method_descriptions.ARMA import DESCRIPTION, PARAMS_CHOICE
+
 
 
 def arma_run(time_series, p, q):
@@ -37,8 +39,11 @@ def main():
     setup_page(
         "Прогнозирование временных рядов с использованием ARMA", "Настройки ARMA"
     )
-    txt.ARMA_descr()
-    txt.ARMA_params_choice()
+    with st.expander("Что такое метод ARMA?"):
+        st.markdown(DESCRIPTION, unsafe_allow_html=True)
+    
+    with st.sidebar.expander("Как выбрать параметры?"):
+        st.markdown(PARAMS_CHOICE, unsafe_allow_html=True)
 
     time_series = load_time_series()
     acf_df, pacf_df = calculate_acf_pacf(time_series)
