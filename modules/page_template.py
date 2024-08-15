@@ -2,22 +2,20 @@ import streamlit as st
 import pandas as pd
 
 
+import streamlit as st
+import pandas as pd
+import markdown2
+from pathlib import Path
+
+
 def setup_page(title, sidebar_header):
     st.set_page_config(page_title=title)
-    st.title(f"Прогнозирование временных рядов с использованием {title}")
+    st.title(title)
     st.sidebar.header(sidebar_header)
 
 
-def display_data(df):
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write(df)
-    with col2:
-        st.line_chart(df.iloc[:, 0])
-
-
 def load_time_series():
-    if "time_series" in st.session_state and not st.session_state.time_series.empty:
+    if "time_series" in st.session_state and st.session_state.time_series is not None:
         time_series = st.session_state.time_series
     else:
         st.warning(
@@ -27,6 +25,14 @@ def load_time_series():
     st.subheader("Загруженный ряд")
     display_data(time_series)
     return time_series
+
+
+def display_data(df):
+    col1, col2 = st.columns([0.3, 0.7])
+    with col1:
+        st.write(df)
+    with col2:
+        st.line_chart(df.iloc[:, 0])
 
 
 def run_calculations_on_button_click(calculation_function, *args, **kwargs):
