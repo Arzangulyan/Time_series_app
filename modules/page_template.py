@@ -37,12 +37,27 @@ def display_data(df):
 
 def run_calculations_on_button_click(calculation_function, *args, **kwargs):
     """
-    Запускает вычисления только при нажатии кнопки в сайдбаре.
+    Запускает вычисления при нажатии кнопки в сайдбаре и сохраняет состояние между обновлениями.
 
     Args:
         calculation_function (callable): Функция, выполняющая вычисления.
         *args: Позиционные аргументы для функции вычислений.
         **kwargs: Именованные аргументы для функции вычислений.
     """
+    # Уникальный ключ для состояния кнопки
+    button_state_key = f"run_calc_state_{calculation_function.__name__}"
+    
+    # Инициализация состояния, если оно еще не существует
+    if button_state_key not in st.session_state:
+        st.session_state[button_state_key] = False
+    
+    # Кнопка для запуска вычислений
     if st.sidebar.button("Запустить вычисления"):
+        st.session_state[button_state_key] = not st.session_state[button_state_key]
+    
+    # Отображение текущего состояния
+    st.sidebar.write("Статус вычислений: " + ("Запущено" if st.session_state[button_state_key] else "Остановлено"))
+    
+    # Выполнение вычислений, если состояние True
+    if st.session_state[button_state_key]:
         calculation_function(*args, **kwargs)
