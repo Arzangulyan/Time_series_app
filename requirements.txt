@@ -5,6 +5,7 @@ matplotlib
 numpy
 pandas
 PyWavelets
+plotly
 seaborn
 statsmodels
 streamlit
