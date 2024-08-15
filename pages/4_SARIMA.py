@@ -65,18 +65,22 @@ def main():
         st.write(f"Временной ряд после дифференцирования (d={d}, D={D})")
     else:
         diff_data = data
-    
-    adf_result = adfuller(diff_data)
-    st.write("Результаты теста Дики-Фуллера:")
-    st.write(f"ADF Statistic: {adf_result[0]}")
-    st.write(f"p-value: {adf_result[1]}")
-    for key, value in adf_result[4].items():
-        st.write(f"Critical Value ({key}): {value}")
-    
-    if adf_result[1] <= 0.05:
-        st.success("Временной ряд стационарен (p-value <= 0.05)")
+
+    # Проверка на константность ряда
+    if len(set(diff_data)) == 1:
+        st.warning("Ряд стал константным после дифференцирования. Рекомендуется уменьшить порядок дифференцирования.")
     else:
-        st.warning("Временной ряд не стационарен (p-value > 0.05). Рекомендуется увеличить порядок дифференцирования.")
+        adf_result = adfuller(diff_data)
+        st.write("Результаты теста Дики-Фуллера:")
+        st.write(f"ADF Statistic: {adf_result[0]}")
+        st.write(f"p-value: {adf_result[1]}")
+        for key, value in adf_result[4].items():
+            st.write(f"Critical Value ({key}): {value}")
+        
+        if adf_result[1] <= 0.05:
+            st.success("Временной ряд стационарен (p-value <= 0.05)")
+        else:
+            st.warning("Временной ряд не стационарен (p-value > 0.05). Рекомендуется увеличить порядок дифференцирования.")
 
     st.subheader("Анализ ACF и PACF")
     acf_pacf_fig = plot_acf_pacf(diff_data)
