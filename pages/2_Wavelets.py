@@ -10,6 +10,7 @@ from modules.page_template import (
     display_data,
     run_calculations_on_button_click,
 )
+from method_descriptions.Wavelet import DESCRIPTION, PARAMS_CHOICE
 
 def wavelet_run(time_series, wavelet_select):
     coef, freqs = wavelet_transform(time_series, wavelet_select)
@@ -31,7 +32,14 @@ def wavelet_run(time_series, wavelet_select):
 
 def main():
     setup_page("Wavelets", "Настройки вейвлетов")
-    txt.Wavelet_descr()
+    
+    # Добавляем описание метода
+    with st.expander("Что такое вейвлет-преобразование?"):
+        st.markdown(DESCRIPTION, unsafe_allow_html=True)
+    
+    # Добавляем описание выбора параметров
+    with st.sidebar.expander("Как выбрать параметры?"):
+        st.markdown(PARAMS_CHOICE, unsafe_allow_html=True)
 
     time_series = load_time_series()
     if time_series is None or time_series.empty:
