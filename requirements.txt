@@ -1,5 +1,6 @@
 altair
 cvxpy
+markdown2
 matplotlib
 numpy
 pandas
