@@ -29,8 +29,8 @@ def new_method_start():
     # st.session_state
     # st.session_state.final_dataframe.empty
 
-    if not st.session_state.final_dataframe.empty:
-        time_series = st.session_state.final_dataframe
+    if not st.session_state.time_series.empty:
+        time_series = st.session_state.time_series
     else:
         st.warning(
             "Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»"

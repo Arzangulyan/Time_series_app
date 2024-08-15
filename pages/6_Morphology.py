@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import functions_morfology as f
+import modules.morfology_module as f
 import sys
 import heapq
 
@@ -27,8 +27,8 @@ def new_method_start():
     # st.session_state
     # st.session_state.final_dataframe.empty
 
-    if not st.session_state.final_dataframe.empty:
-        time_series = st.session_state.final_dataframe
+    if not st.session_state.time_series.empty:
+        time_series = st.session_state.time_series
     else:
         st.warning(
             "Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»"
