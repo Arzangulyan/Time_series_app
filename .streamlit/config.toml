@@ -3,3 +3,6 @@ primaryColor="#000263"
 backgroundColor="#fffefe"
 secondaryBackgroundColor="#d2d2d2"
 textColor="#000000"
+
+[server]
+maxMessageSize = 900
