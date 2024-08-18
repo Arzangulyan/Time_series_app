@@ -43,6 +43,7 @@ def plot_acf_pacf(data, lags=1000):
     fig.update_layout(height=600, width=800, title_text="ACF and PACF Plots")
     return fig
 
+@st.cache_data
 def calculate_acf_pacf(data):
     acf_values = acf(data, nlags=100)
     pacf_values = pacf(data, nlags=100)
