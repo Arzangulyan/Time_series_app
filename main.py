@@ -233,7 +233,7 @@ def main():
         st.session_state.start_date = None
         st.session_state.end_date = None
         st.session_state.selected_params = None
-        st.experimental_rerun()
+        st.rerun()
 
     # Загрузка или создание временного ряда
     utils.nothing_selected(data_radio)

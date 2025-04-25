@@ -32,7 +32,16 @@ def display_data(df):
     with col1:
         st.write(df)
     with col2:
-        st.line_chart(df.iloc[:, 0])
+        # Проверяем тип данных и соответствующим образом отображаем их
+        if isinstance(df, pd.DataFrame):
+            if df.shape[1] > 0:  # Убедимся, что есть хотя бы один столбец
+                st.line_chart(df.iloc[:, 0])
+            else:
+                st.warning("DataFrame не содержит столбцов для отображения")
+        elif isinstance(df, pd.Series):
+            st.line_chart(df)
+        else:
+            st.warning(f"Неподдерживаемый тип данных: {type(df)}")
 
 
 def run_calculations_on_button_click(calculation_function, *args, **kwargs):

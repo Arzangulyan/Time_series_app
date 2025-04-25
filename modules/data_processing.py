@@ -5,7 +5,10 @@ from config import STATIONARITY_THRESHOLD
 
 
 def smooth_time_series(df: pd.DataFrame, window: int) -> pd.DataFrame:
-    return df.rolling(window=window, min_periods=1).mean()
+    smoothed = df.rolling(window=window, min_periods=window).mean()
+    return smoothed.dropna()
+
+
 
 
 def check_stationarity(data):
