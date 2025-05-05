@@ -62,11 +62,20 @@ def check_stationarity(time_series):
     dict: Словарь с результатами теста Дики-Фуллера.
     """
     result = adfuller(time_series.dropna())
-    return {
+    
+    # Словарь для результатов
+    stationarity_result = {
         "Тестовая статистика": result[0],
         "p-значение": result[1],
-        "Критические значения": result[4],
     }
+    
+    # Безопасно добавляем критические значения, если они доступны
+    if len(result) > 4 and result[4] is not None:
+        stationarity_result["Критические значения"] = result[4]
+    else:
+        stationarity_result["Критические значения"] = {}
+    
+    return stationarity_result
 
 
 def calculate_autocorrelation(time_series, lags=40):
@@ -97,18 +106,19 @@ def calculate_partial_autocorrelation(time_series, lags=40):
     return pacf(time_series.dropna(), nlags=lags)
 
 
-def decompose_time_series(time_series, period):
+def decompose_time_series(time_series, period, model="additive"):
     """
     Разлагает временной ряд на тренд, сезонность и остаток.
 
     Args:
         time_series (pd.Series): Временной ряд для анализа.
         period (int): Период сезонности, задаваемый пользователем.
+        model (str): Модель декомпозиции ('additive' или 'multiplicative').
 
     Returns:
         DecomposeResult: Объект с результатами декомпозиции.
     """
-    result = seasonal_decompose(time_series, period=period)
+    result = seasonal_decompose(time_series, period=period, model=model)
     return result
 
 

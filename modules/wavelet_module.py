@@ -6,15 +6,84 @@ import streamlit as st
 from scipy.signal import find_peaks, savgol_filter, butter, filtfilt
 import plotly.express as px
 
+# --- Константы для единиц измерения --- 
+TIME_UNITS = {
+    "Измерения": "measurements",
+    "Секунды": "seconds",
+    "Минуты": "minutes",
+    "Часы": "hours",
+    "Дни": "days",
+    "Недели": "weeks",
+    "Месяцы": "months", # Приблизительно
+    "Годы": "years"    # Приблизительно
+}
+DEFAULT_TIME_UNIT = "Дни"
+MEASUREMENT_UNIT_KEY = "Измерения"
+# -------------------------------------
+
+# --- Новая функция: Определение временного шага --- 
+def get_time_delta(index):
+    """
+    Определяет временной шаг (timedelta) для DatetimeIndex.
+
+    Пытается определить частоту, если не удается, вычисляет медианную разницу.
+    
+    Параметры:
+    ----------
+    index : pd.Index
+        Индекс временного ряда.
+        
+    Возвращает:
+    -----------
+    pd.Timedelta or None
+        Временной шаг или None, если индекс не DatetimeIndex или шаг определить не удалось.
+    """
+    if isinstance(index, pd.DatetimeIndex):
+        freq = pd.infer_freq(index)
+        if freq:
+            try:
+                # Преобразуем частоту в Timedelta
+                # pd.Timedelta(pd.tseries.frequencies.to_offset(freq)) может быть сложным,
+                # пробуем проще:
+                if len(index) > 1:
+                     # Возьмем разницу между первыми двумя точками как оценку, 
+                     # если частота стандартная (D, h, min, s)
+                     # Для сложных частот (ME, QE) это может быть неточно, но как базовая оценка
+                     delta = index[1] - index[0]
+                     # Проверим, что это типичная частота
+                     if freq in ['D', 'h', 'min', 's', 'ms', 'us', 'ns']: 
+                         return delta
+                     else: # Для месячной, недельной и т.д. вернем медиану
+                          diffs = index.to_series().diff().dropna()
+                          if not diffs.empty:
+                             return diffs.median()
+            except Exception as e:
+                print(f"Не удалось определить Timedelta из частоты '{freq}': {e}")
+                # Если не получилось из частоты, считаем медиану
+                pass 
+        
+        # Если частоту определить не удалось или не получилось выше, считаем медиану
+        if len(index) > 1:
+            diffs = index.to_series().diff().dropna()
+            if not diffs.empty:
+                median_delta = diffs.median()
+                # Проверяем, что результат - Timedelta
+                if isinstance(median_delta, pd.Timedelta):
+                     return median_delta
+    return None
+
 # Соотношения между масштабом и периодом для различных вейвлетов
 # Эти соотношения соответствуют теоретическим значениям для данных вейвлетов
+# Источники: Torrence & Compo (1998) для Morlet, 1/pywt.central_frequency для остальных
+# Период (в ед. времени) = factor * scale * sampling_period
+# При sampling_period=1 (т.е. период в измерениях), Период (изм) = factor * scale
 wavelet_period_factors = {
-    "Морле": 1.22,  # Скорректированное значение для вейвлета Морле (было: 4 * np.pi / (6 + np.sqrt(2 + 6**2)))
-    "Гаусс": 2.0,  # Более точный коэффициент для первой производной гауссова вейвлета
-    "Мексиканская шляпа": 2 * np.pi / np.sqrt(2.5),  # Для "мексиканской шляпы" (DOG вейвлет)
-    "Симлет": 1.5,  # Для симлета 5-го порядка
-    "Добеши": 1.4,  # Для Добеши 8-го порядка
-    "Койфлет": 1.2   # Для Койфлета 5-го порядка
+    "Морле": 1.22,  # Factor based on Torrence & Compo (1998) for omega0=6
+    "Гаусс": 2.51,  # Factor approx. 1 / pywt.central_frequency('gaus1')
+    "Мексиканская шляпа": 4.0,   # Factor approx. 1 / pywt.central_frequency('mexh') (close to 3.974 from T&C)
+    "Симлет": 1.5,   # Factor approx. 1 / pywt.central_frequency('sym5')
+    "Добеши": 1.4,   # Factor approx. 1 / pywt.central_frequency('db8')
+    "Койфлет": 1.4    # Factor approx. 1 / pywt.central_frequency('coif5') (corrected from 1.2)
 }
 
 # Кодовые имена вейвлетов для PyWavelets
@@ -59,10 +128,11 @@ def gaussian_window(M, std, sym=True):
         n = np.arange(0, M)
     
     # Вычисляем значения функции Гаусса
-    w = np.exp(-0.5 * (n / std)**2)
+    sigma = 2 * std * std
+    w = np.exp(-n**2 / sigma)
     
-    # Нормализуем максимум к 1
-    w = w / np.max(w)
+    # Нормализуем максимум к 1 (добавлено для соответствия описанию)
+    # w = w / np.max(w) # Эта нормализация не соответствует scipy.signal.gaussian
     
     return w
 
@@ -88,119 +158,248 @@ def wavelet_transform(time_series, mother_wavelet="Морле", num_scales=256, 
     
     Возвращает:
     -----------
-    np.ndarray или tuple
-        Массив вейвлет-коэффициентов или кортеж (коэффициенты, масштабы, периоды)
+    tuple
+        Кортеж с результатами. Если return_periods=True, то (коэффициенты, частоты, периоды).
+        Иначе (коэффициенты, частоты).
+        В случае ошибки возвращает кортеж с пустыми массивами.
     """
-    # Получаем данные из временного ряда
-    if isinstance(time_series, pd.DataFrame):
-        # Если передан DataFrame, берем первый столбец
-        signal = time_series.iloc[:, 0].values
-    elif isinstance(time_series, pd.Series):
-        # Если передана Series, берем значения
-        signal = time_series.values
+    # --- ИСПРАВЛЕНИЕ ТИПОВ: Явное преобразование к numpy array --- 
+    if isinstance(time_series, (pd.Series, pd.DataFrame)):
+        signal = np.array(time_series.iloc[:, 0].values if isinstance(time_series, pd.DataFrame) else time_series.values)
     else:
-        # Иначе преобразуем в numpy массив
-        signal = np.array(time_series)
-    
-    # Получаем длину сигнала
+        signal = np.asarray(time_series) # Преобразуем к numpy array, если это возможно
+
+    if signal.ndim > 1:
+         signal = signal.flatten() # Убедимся, что сигнал одномерный
+         
+    if not np.issubdtype(signal.dtype, np.number):
+         # Попытка преобразовать к числовому типу, если возможно
+         try:
+             signal = signal.astype(np.float64)
+         except ValueError:
+             st.error("Ошибка: Входные данные содержат нечисловые значения, которые не удалось преобразовать.")
+             if return_periods:
+                 return np.array([]), np.array([]), np.array([])
+             else:
+                 return np.array([]), np.array([])
+
+    if signal.size == 0:
+        if return_periods: return np.array([]), np.array([]), np.array([])
+        else: return np.array([]), np.array([])
+
     signal_length = len(signal)
-    
-    # Предобработка сигнала - удаляем среднее значение
-    signal = signal - np.mean(signal)
-    
-    # Упрощенная предобработка: применяем сглаживание только для сигналов среднего и большого размера
+
+    # --- ИСПРАВЛЕНИЕ: np.mean --- 
+    try:
+        # Убедимся, что работаем с float для mean
+        signal_float = signal.astype(np.float64)
+        signal_mean = np.mean(signal_float)
+        signal = signal_float - signal_mean
+    except ValueError:
+        print("Предупреждение: Не удалось вычесть среднее значение.")
+        pass 
+
     if signal_length > 100:
-        # Применяем скользящее среднее без использования сложных окон
         window_size = min(5, signal_length // 20)
         if window_size > 1:
-            # Используем простой метод свертки для сглаживания
             weights = np.ones(window_size) / window_size
-            # Дополняем сигнал по краям для избежания краевых эффектов
-            padded = np.pad(signal, (window_size//2, window_size//2), mode='edge')
-            filtered_signal = np.convolve(padded, weights, mode='valid')
-            
-            # Применяем слабое сглаживание для сохранения информации о периодах
-            signal = 0.8 * signal + 0.2 * filtered_signal
-    
-    # Получаем материнский вейвлет из словаря
+            # --- ИСПРАВЛЕНИЕ ТИПОВ: np.pad --- 
+            try:
+                 padded = np.pad(signal.astype(float), (window_size//2, window_size//2), mode='edge') # Указываем тип float
+                 filtered_signal = np.convolve(padded, weights, mode='valid')
+                 # --- ИСПРАВЛЕНИЕ ТИПОВ: Умножение --- 
+                 signal = 0.8 * signal + 0.2 * filtered_signal # Numpy сам справится с типами здесь
+            except Exception as e:
+                 print(f"Предупреждение: Не удалось применить сглаживание: {e}")
+
     wavelet_name = mother_switcher.get(mother_wavelet, 'morl')
-    
-    # Определяем максимальный масштаб (не более 1/3 длины сигнала)
     max_auto_scale = signal_length // 3
-    
-    # Используем переданные параметры или автоматические
-    if min_scale is None:
-        # Минимальный масштаб - не менее 1
-        min_scale = 1
-    
-    if max_scale is None:
-        max_scale = max_auto_scale
-    
-    # Оптимизация: уменьшаем количество масштабов для очень длинных сигналов
+    if min_scale is None: min_scale = 1
+    if max_scale is None: max_scale = max_auto_scale
     actual_num_scales = num_scales
-    if signal_length > 1000:
-        # Для длинных сигналов уменьшаем количество масштабов для ускорения
-        actual_num_scales = max(64, num_scales // 2)
+    if signal_length > 1000: actual_num_scales = max(64, num_scales // 2)
     
-    # Создаем логарифмическую шкалу масштабов для лучшего разрешения
+    # Убедимся что min_scale < max_scale
+    if min_scale >= max_scale:
+         max_scale = min_scale + 1 # Или другое значение по умолчанию
+         print(f"Предупреждение: min_scale ({min_scale}) >= max_scale ({max_scale}). Устанавливаю max_scale = {max_scale}")
+
     scales = np.logspace(np.log10(min_scale), np.log10(max_scale), actual_num_scales)
-    
-    # Выполняем непрерывное вейвлет-преобразование
+
     try:
-        # Упрощаем логику вызова cwt - используем единый подход
         coef, freqs = pywt.cwt(signal, scales, wavelet_name)
     except Exception as e:
         print(f"Ошибка при выполнении вейвлет-преобразования: {e}")
-        # В случае ошибки возвращаем пустые массивы
+        # --- ИСПРАВЛЕНИЕ: Возврат кортежа правильной длины при ошибке --- 
         if return_periods:
-            return np.array([]), np.array([])
+            return np.array([]), np.array([]), np.array([]) # Возвращаем 3 пустых массива
         else:
-            return np.array([])
-    
-    # Если нужно возвращать периоды, конвертируем масштабы в периоды
+            return np.array([]), np.array([]) # Возвращаем 2 пустых массива
+
     if return_periods:
-        # Периоды обратно пропорциональны частотам
         if mother_wavelet in wavelet_period_factors:
-            # Используем предопределенные коэффициенты для вейвлетов
             period_factor = wavelet_period_factors[mother_wavelet]
             periods = scales * period_factor
         else:
-            # Для других вейвлетов используем обратные частоты
-            periods = 1.0 / freqs
-        
+            # Обработка случая, когда частота равна 0
+            periods = np.full_like(freqs, np.inf)
+            non_zero_freqs = freqs != 0
+            periods[non_zero_freqs] = 1.0 / freqs[non_zero_freqs]
+            # Замена inf на большое число, если нужно
+            # periods[np.isinf(periods)] = 1e12 
         return coef, freqs, periods
     else:
         return coef, freqs
 
-def get_scale_ticks(min_period, max_period, num_ticks=6):
-    log_min, log_max = np.log2(min_period), np.log2(max_period)
-    log_ticks = np.linspace(log_min, log_max, num_ticks)
-    return np.exp2(log_ticks)
+# --- ИЗМЕНЕНИЕ: get_scale_ticks теперь принимает time_delta и unit --- 
+def get_scale_ticks(min_period_meas, max_period_meas, time_delta=None, target_unit_key="Измерения", num_ticks=6):
+    """
+    Генерирует значения тиков для оси периодов (логарифмическая шкала).
 
-def format_period(period, unit: str = 'days'):
-    if unit == 'days':
-        if period < 7:
-            return f"{period:.0f} дней"
-        elif period < 30:
-            return f"{period/7:.1f} недель"
-        elif period < 365:
-            return f"{period/30:.1f} месяцев"
+    Параметры:
+    ----------
+    min_period_meas : float
+        Минимальный период в измерениях.
+    max_period_meas : float
+        Максимальный период в измерениях.
+    time_delta : pd.Timedelta, optional
+        Временной шаг одного измерения.
+    target_unit_key : str, optional
+        Ключ целевой единицы измерения из TIME_UNITS.
+    num_ticks : int, optional
+        Желаемое количество тиков.
+
+    Возвращает:
+    -----------
+    tuple (np.ndarray, list)
+        Кортеж: (значения тиков в единицах log2(период_в_измерениях), 
+                 текстовые метки тиков в выбранных единицах)
+    """
+    log_min, log_max = np.log2(max(1, min_period_meas)), np.log2(max(1, max_period_meas))
+    log_tickvals_meas = np.linspace(log_min, log_max, num_ticks)
+    tickvals_meas = np.exp2(log_tickvals_meas)
+
+    # Форматируем текстовые метки в выбранных единицах
+    ticktext = [format_period(p, time_delta, target_unit_key) for p in tickvals_meas]
+
+    # Возвращаем логарифмические значения тиков (для оси) и текстовые метки
+    return log_tickvals_meas, ticktext
+
+# --- ИЗМЕНЕНИЕ: format_period для работы с timedelta и единицами --- 
+def format_period(period_meas, time_delta=None, target_unit_key="Измерения"):
+    """
+    Форматирует значение периода в выбранных единицах.
+
+    Параметры:
+    ----------
+    period_meas : float
+        Период в количестве измерений.
+    time_delta : pd.Timedelta, optional
+        Временной шаг одного измерения.
+    target_unit_key : str, optional
+        Ключ целевой единицы измерения из TIME_UNITS ('Дни', 'Секунды' и т.д.).
+
+    Возвращает:
+    -----------
+    str
+        Отформатированное значение периода.
+    """
+    # Если выбраны "Измерения" или нет временного шага
+    if target_unit_key == "Измерения" or time_delta is None:
+        # Округляем до целых, если > 10, иначе 1 знак
+        if period_meas < 10:
+             return f"{period_meas:.1f} изм."
         else:
-            return f"{period/365:.1f} лет"
-    else:  # measurements
-        return f"{period:.0f} измерений"
+             return f"{period_meas:.0f} изм."
 
-def plot_wavelet_transform(time_series, coef, freqs, periods, tickvals, ticktext, scale_unit):
+    # Если есть временной шаг, конвертируем период в timedelta
+    try:
+        period_time = period_meas * time_delta
+    except TypeError:
+        # Если time_delta не является Timedelta (например, None)
+         return f"{period_meas:.0f} изм. (?)" # Возвращаем измерения с пометкой
+
+    # Конвертируем timedelta в нужные единицы
+    total_seconds = period_time.total_seconds()
+
+    unit = TIME_UNITS.get(target_unit_key, "seconds") # По умолчанию секунды, если ключ не найден
+
+    if unit == "years":
+        val = total_seconds / (365.25 * 24 * 3600)
+        unit_str = "г."
+        fmt = ".1f" if val < 10 else ".0f"
+    elif unit == "months":
+        val = total_seconds / (30.44 * 24 * 3600) # Средняя длина месяца
+        unit_str = "мес."
+        fmt = ".1f" if val < 10 else ".0f"
+    elif unit == "weeks":
+        val = total_seconds / (7 * 24 * 3600)
+        unit_str = "нед."
+        fmt = ".1f" if val < 10 else ".0f"
+    elif unit == "days":
+        val = total_seconds / (24 * 3600)
+        unit_str = "дн."
+        fmt = ".1f" if val < 10 else ".0f"
+    elif unit == "hours":
+        val = total_seconds / 3600
+        unit_str = "ч."
+        fmt = ".1f" if val < 10 else ".0f"
+    elif unit == "minutes":
+        val = total_seconds / 60
+        unit_str = "мин."
+        fmt = ".1f" if val < 10 else ".0f"
+    else: # seconds или measurements (уже обработан)
+        val = total_seconds
+        unit_str = "сек."
+        fmt = ".1f" if val < 10 else ".0f"
+
+    return f"{val:{fmt}} {unit_str}"
+
+# --- ИЗМЕНЕНИЕ: plot_wavelet_transform принимает time_delta и unit --- 
+def plot_wavelet_transform(time_series_pd, coef, freqs, periods_meas, tickvals_log, ticktext, selected_unit_key):
+    """
+    Строит тепловую карту вейвлет-преобразования.
+
+    Параметры:
+    ----------
+    time_series_pd : pd.Series или pd.DataFrame
+         Временной ряд (с индексом)
+    coef : np.ndarray
+        Вейвлет-коэффициенты.
+    freqs : np.ndarray
+        Частоты.
+    periods_meas : np.ndarray
+        Периоды в измерениях.
+    tickvals_log : np.ndarray
+        Позиции тиков на оси Y (в log2 от периода в измерениях).
+    ticktext : list
+        Текстовые метки для тиков на оси Y.
+    selected_unit_key : str
+        Выбранная единица измерения периода (ключ из TIME_UNITS).
+    """
+    
+    # Определяем временной шаг
+    time_delta = get_time_delta(time_series_pd.index)
+    
     # Создаем массив текстовых строк для hovertext
     hover_texts = []
-    for i in range(len(periods)):
+    for i in range(len(periods_meas)):
         row_texts = []
+        period_val_meas = periods_meas[i]
+        # Форматируем период для hover text
+        period_formatted = format_period(period_val_meas, time_delta, selected_unit_key)
+        period_meas_formatted = format_period(period_val_meas, None, "Измерения") # Всегда добавляем измерения
+        
         for j in range(coef.shape[1]):
-            # Создаем текст для каждой ячейки тепловой карты
-            time_val = time_series.index[j] if hasattr(time_series, 'index') else j
-            period_val = round(periods[i], 1)
+            time_val = time_series_pd.index[j] if hasattr(time_series_pd, 'index') else j
             power_val = round(np.abs(coef)[i, j], 2)
-            text = f"Время: {time_val}<br>Период: {period_val} измерений<br>Мощность: {power_val}"
+            
+            # Собираем текст для hover
+            text = f"Время: {time_val}<br>"
+            text += f"Период: {period_formatted}<br>"
+            if selected_unit_key != "Измерения": # Показываем измерения, если они не выбраны основной единицей
+                 text += f"({period_meas_formatted})<br>"
+            text += f"Мощность: {power_val}"
             row_texts.append(text)
         hover_texts.append(row_texts)
     
@@ -208,11 +407,10 @@ def plot_wavelet_transform(time_series, coef, freqs, periods, tickvals, ticktext
     
     fig = go.Figure(data=go.Heatmap(
         z=np.abs(coef),
-        x=time_series.index,
-        y=np.log2(periods),
+        x=time_series_pd.index,
+        y=np.log2(periods_meas), # Ось Y всегда в log2 от измерений
         colorscale='Viridis',
         colorbar=dict(title='Мощность'),
-        # Используем готовый текст вместо шаблона
         hoverinfo='text',
         text=hover_texts
     ))
@@ -220,25 +418,26 @@ def plot_wavelet_transform(time_series, coef, freqs, periods, tickvals, ticktext
     fig.update_layout(
         title="Вейвлет-преобразование",
         xaxis_title="Время",
-        yaxis_title=f"Период ({scale_unit})",
+        yaxis_title=f"Период ({selected_unit_key})", # Заголовок оси Y в выбранных единицах
         yaxis=dict(
             tickmode="array",
-            tickvals=tickvals,
-            ticktext=ticktext,
+            tickvals=tickvals_log, # Позиции тиков
+            ticktext=ticktext,     # Текстовые метки в выбранных единицах
         ),
     )
     
     return fig
 
-def find_significant_periods_wavelet(df, mother_wavelet="Морле", power_threshold=0.2, num_scales=256, min_scale=1, max_scale=None, max_periods=10, threshold_percent=95):
+# --- ИЗМЕНЕНИЕ: find_significant_periods_wavelet принимает time_delta и unit --- 
+def find_significant_periods_wavelet(time_series_pd, mother_wavelet="Морле", power_threshold=0.2, num_scales=256, min_scale=1, max_scale=None, max_periods=10, threshold_percent=95, coef=None, periods_meas=None):
     """
     Находит значимые периодичности во временном ряде с использованием вейвлет-преобразования.
-    Универсальный алгоритм поиска пиков в спектре мощности.
+    Возвращает DataFrame с периодами в измерениях и в выбранных единицах времени (если возможно).
     
     Параметры:
     ----------
-    df : pandas.DataFrame или pd.Series
-        Временной ряд для анализа
+    time_series_pd : pandas.DataFrame или pd.Series
+        Временной ряд для анализа (должен иметь индекс)
     mother_wavelet : str, optional
         Тип вейвлета для анализа
     power_threshold : float, optional
@@ -253,341 +452,350 @@ def find_significant_periods_wavelet(df, mother_wavelet="Морле", power_thre
         Максимальное количество возвращаемых периодов
     threshold_percent : float, optional
         Процентиль для определения порога значимости
+    coef : np.ndarray, optional
+        Предварительно рассчитанные вейвлет-коэффициенты.
+    periods_meas : np.ndarray, optional
+        Предварительно рассчитанные периоды в измерениях.
         
     Возвращает:
     -----------
     pandas.DataFrame
-        Датафрейм с периодами и их мощностью
+        Датафрейм с колонками: 
+        'Период (изм.)', 'Мощность', 
+        'Период (формат.)' (отформатированный в единицах по умолчанию или измерениях)
     """
-    # Проверяем тип входных данных
-    if isinstance(df, pd.Series):
-        time_series = df.values
-    elif isinstance(df, pd.DataFrame):
-        if len(df.columns) == 0:
-            raise ValueError("DataFrame не содержит данных")
-        time_series = df.iloc[:, 0].values
+    # --- Получение данных и индекса --- 
+    if isinstance(time_series_pd, (pd.Series, pd.DataFrame)):
+        time_series = np.array(time_series_pd.iloc[:, 0].values if isinstance(time_series_pd, pd.DataFrame) else time_series_pd.values)
+        ts_index = time_series_pd.index
     else:
-        raise ValueError("Входные данные должны быть pandas DataFrame или Series")
-    
-    # Удаляем среднее значение из ряда
-    time_series = time_series - np.mean(time_series)
-    
-    # Сглаживаем ряд для уменьшения шума
-    window_length = min(51, len(time_series) // 10 * 2 + 1)  # Адаптивный размер окна
-    polyorder = min(3, window_length - 1)  # Порядок полинома
-    try:
-        time_series_smoothed = savgol_filter(time_series, window_length, polyorder)
-    except Exception:
-        time_series_smoothed = time_series
-    
-    # Определяем масштабы для вейвлет-преобразования
-    if max_scale is None:
-        max_scale = len(time_series) // 3
-    
-    # Создаем логарифмическую шкалу масштабов с оптимальным количеством точек для баланса
-    # между точностью и производительностью
-    scales = np.logspace(np.log10(min_scale), np.log10(max_scale), num_scales)
-    
-    # Выбираем материнский вейвлет
-    if mother_wavelet == "Морле":
-        wavelet = 'morl'
-    elif mother_wavelet == "Мексиканская шляпа":
-        wavelet = 'mexh'
+        time_series = np.asarray(time_series_pd)
+        ts_index = pd.RangeIndex(start=0, stop=len(time_series), step=1) # Создаем RangeIndex если нет
+        
+    # --- Определяем временной шаг --- 
+    time_delta = get_time_delta(ts_index)
+
+    if time_series.ndim > 1: time_series = time_series.flatten()
+    if not np.issubdtype(time_series.dtype, np.number):
+        try: time_series = time_series.astype(np.float64)
+        except ValueError: return pd.DataFrame()
+    if time_series.size == 0: return pd.DataFrame()
+
+    # --- Вычисление или использование переданных coef/periods --- 
+    if coef is None or periods_meas is None:
+        # Вычитание среднего
+        try:
+            ts_float = time_series.astype(np.float64)
+            time_series_proc = ts_float - np.mean(ts_float)
+        except ValueError: 
+             time_series_proc = time_series # Используем исходный, если не вышло
+             pass
+
+        # Сглаживание
+        window_length = min(51, max(1, len(time_series_proc) // 10 * 2 + 1))
+        polyorder = min(3, max(0, window_length - 2))
+        time_series_smoothed = time_series_proc
+        if window_length > polyorder and window_length > 0:
+            try: time_series_smoothed = savgol_filter(time_series_proc, window_length, polyorder)
+            except ValueError: pass
+
+        # Параметры CWT
+        signal_length = len(time_series_smoothed)
+        if max_scale is None: max_scale = signal_length // 3
+        if max_scale <= min_scale: max_scale = min_scale + 1 
+        scales = np.logspace(np.log10(min_scale), np.log10(max_scale), num_scales)
+        wavelet = mother_switcher.get(mother_wavelet, 'morl')
+
+        # CWT
+        try: 
+            transform_result = wavelet_transform(time_series_smoothed, mother_wavelet, num_scales, min_scale, max_scale, return_periods=True)
+            if len(transform_result) != 3: raise ValueError("Неверный результат wavelet_transform")
+            coef, _, periods_meas = transform_result # _ для freqs
+        except Exception as e: 
+             print(f"Ошибка CWT в find_significant_periods: {e}")
+             return pd.DataFrame()
+    # -----------------------------------------------------
     else:
-        wavelet = mother_switcher.get(mother_wavelet, 'morl')  # Используем словарь для получения кода вейвлета
-    
-    # Выполняем вейвлет-преобразование
-    coefficients, frequencies = pywt.cwt(time_series_smoothed, scales, wavelet)
-    
-    # Вычисляем мощность вейвлет-преобразования
-    power = np.abs(coefficients) ** 2
-    
-    # Для более точного анализа берем максимальную мощность по времени для каждого периода
-    max_power = np.max(power, axis=1)
-    # А также среднюю мощность
-    mean_power = np.mean(power, axis=1)
-    
-    # Комбинируем максимальную и среднюю мощность для улучшения обнаружения пиков
-    combined_power = 0.7 * mean_power + 0.3 * max_power
-    
-    # Вычисляем периоды, соответствующие частотам - используем тот же метод, что и в wavelet_transform
-    if mother_wavelet in wavelet_period_factors:
-        # Используем предопределенные коэффициенты для вейвлетов
-        period_factor = wavelet_period_factors[mother_wavelet]
-        periods = scales * period_factor
-    else:
-        # Для других вейвлетов используем обратные частоты
-        periods = 1.0 / frequencies
-    
-    # Нормализуем мощность для определения порога
-    normalized_power = combined_power / np.max(combined_power)
-    
-    # Адаптивно настраиваем порог высоты и prominence в зависимости от threshold_percent
+         # Используем переданные coef и periods_meas
+         # Проверяем согласованность размерностей
+         if coef.shape[0] != periods_meas.shape[0]:
+              st.error("Размерности переданных coef и periods_meas не совпадают!")
+              return pd.DataFrame()
+              
+    # Расчет мощности (если coef был пересчитан или передан)
+    if coef.size == 0 or periods_meas.size == 0:
+         return pd.DataFrame()
+         
+    power = np.abs(coef) ** 2
+    combined_power = 0.7 * np.mean(power, axis=1) + 0.3 * np.max(power, axis=1)
+    # Убрано вычисление периодов, т.к. они либо переданы, либо посчитаны выше
+    # if mother_wavelet in wavelet_period_factors:
+    #     periods = scales * wavelet_period_factors[mother_wavelet]
+    # ...
+    if np.all(np.isinf(periods_meas)) or combined_power.size == 0: return pd.DataFrame()
+
+    # Нормализация мощности
+    max_combined_power = np.max(combined_power)
+    normalized_power = combined_power / max_combined_power if max_combined_power > 0 else np.zeros_like(combined_power)
+
+    # Поиск пиков
     height_threshold = power_threshold * (threshold_percent / 100)
-    
-    # Находим пики с разными параметрами чувствительности
-    # Сначала с более строгими для отбора наиболее ярких
-    peaks, _ = find_peaks(
-        normalized_power, 
-        height=height_threshold,
-        prominence=height_threshold/2,
-        distance=3
-    )
-    
-    # Если найдено менее 2 пиков, пробуем с более мягкими параметрами
-    if len(peaks) < 2:
-        peaks, _ = find_peaks(
-            normalized_power, 
-            height=height_threshold/2,
-            prominence=height_threshold/4,
-            distance=2
-        )
-    
-    # Если все ещё нет пиков, берем точки с максимальной мощностью
+    peaks, _ = find_peaks(normalized_power, height=height_threshold, prominence=max(0, height_threshold/2), distance=3)
+    if len(peaks) < 2: peaks, _ = find_peaks(normalized_power, height=max(0,height_threshold/2), prominence=max(0,height_threshold/4), distance=2)
     if len(peaks) == 0:
-        # Берем топ-3 точки с наибольшей мощностью, исключая очень близкие
         sorted_indices = np.argsort(-normalized_power)
         peaks = []
         for idx in sorted_indices:
-            # Проверяем, не слишком ли близко к уже найденным пикам
-            if not peaks or all(abs(periods[idx] - periods[p]) / periods[p] > 0.1 for p in peaks):
-                peaks.append(idx)
-                if len(peaks) >= 3:  # Максимум 3 пика
-                    break
+            if not np.isinf(periods_meas[idx]): # Используем periods_meas
+                is_far_enough = all(abs(periods_meas[idx] - periods_meas[p]) / periods_meas[p] > 0.1 for p in peaks if periods_meas[p] != 0) if peaks else True
+                if not peaks or is_far_enough:
+                    peaks.append(idx)
+                    if len(peaks) >= 3: break
         peaks = np.array(peaks)
-    
-    # Если все ещё нет пиков, возвращаем пустой датафрейм
-    if len(peaks) == 0:
-        return pd.DataFrame()
-    
-    # Создаем список для хранения результатов
-    results = []
-    
-    # Для каждого найденного пика
-    for peak_idx in peaks:
-        period = periods[peak_idx]
-        power_value = normalized_power[peak_idx]
-        
-        # Округляем период для отображения
-        if period < 10:
-            period_rounded = round(period, 1)
-        else:
-            period_rounded = round(period)
-        
-        # Добавляем строку результата
-        results.append({
-            'Период': period,
-            'Период (округленно)': period_rounded,
-            'Нормализованная мощность': power_value,
-        })
-    
-    # Создаем датафрейм с результатами
-    results_df = pd.DataFrame(results)
-    
-    # Удаляем дубликаты периодов (оставляем только с максимальной мощностью)
-    results_df = results_df.sort_values('Нормализованная мощность', ascending=False)
-    results_df = results_df.drop_duplicates(subset=['Период (округленно)'], keep='first')
-    
-    # Сортируем по убыванию мощности
-    results_df = results_df.sort_values('Нормализованная мощность', ascending=False)
-    
-    # Выбираем не более max_periods результатов
-    return results_df.head(max_periods)
+    if len(peaks) == 0: return pd.DataFrame()
 
-def plot_wavelet_periodicity_analysis(time_series, mother_wavelet="Морле", max_scales=None):
+    # --- Формирование результатов --- 
+    results = []
+    # default_unit = DEFAULT_TIME_UNIT if time_delta else MEASUREMENT_UNIT_KEY # Убрано, форматирование снаружи
+    
+    for peak_idx in peaks:
+        period_meas_val = float(periods_meas[peak_idx]) # Используем periods_meas
+        power_value = float(normalized_power[peak_idx])
+        if np.isinf(period_meas_val): continue
+
+        # --- ИЗМЕНЕНИЕ: Не форматируем здесь --- 
+        # period_formatted = format_period(period_meas, time_delta, default_unit)
+        # period_meas_formatted = format_period(period_meas, None, MEASUREMENT_UNIT_KEY)
+
+        results.append({
+            'Период (изм.)': period_meas_val, # Возвращаем числовое значение
+            'Мощность': power_value,
+            # 'Период (формат.)': period_formatted # Убрано
+        })
+
+    if not results: return pd.DataFrame()
+
+    results_df = pd.DataFrame(results)
+    # Используем числовой 'Период (изм.)' для удаления дубликатов, округляя его для группировки
+    results_df['Период (окр.)'] = results_df['Период (изм.)'].round(1) # Округляем до 1 знака для группировки
+    results_df = results_df.sort_values('Мощность', ascending=False)
+    results_df = results_df.drop_duplicates(subset=['Период (окр.)'], keep='first')
+    results_df = results_df.sort_values('Мощность', ascending=False)
+    return results_df[['Период (изм.)', 'Мощность']].head(max_periods) # Возвращаем нужные колонки
+
+# --- ИЗМЕНЕНИЕ: plot_wavelet_periodicity_analysis принимает рассчитанные данные --- 
+def plot_wavelet_periodicity_analysis(
+    time_series_pd, 
+    mother_wavelet="Морле", 
+    max_scales=None, 
+    selected_unit_key="Измерения",
+    # Добавляем опциональные параметры
+    coef=None,
+    periods_meas=None,
+    significant_periods_df=None):
     """
-    Создает визуализацию для анализа периодичностей с помощью вейвлет-преобразования.
+    Создает визуализацию для анализа периодичностей.
+    Ось X теперь отображается в выбранных единицах.
+    Может принимать pre-calculated coef, periods_meas, significant_periods_df.
     
     Параметры:
     ----------
-    time_series : pd.Series или pd.DataFrame
-        Временной ряд для анализа
-    mother_wavelet : str, optional
-        Тип материнского вейвлета
-    max_scales : int, optional
-        Максимальное количество масштабов
+    ...
+    coef : np.ndarray, optional
+        Предварительно рассчитанные вейвлет-коэффициенты.
+    periods_meas : np.ndarray, optional
+        Предварительно рассчитанные периоды в измерениях.
+    significant_periods_df : pd.DataFrame, optional
+        Предварительно рассчитанный DataFrame значимых периодов (с колонкой 'Период (изм.)').
         
     Возвращает:
     -----------
     fig : plotly.graph_objects.Figure
-        Визуализация анализа периодичностей
-    significant_periods : pd.DataFrame
-        Данные о значимых периодичностях
+    # significant_periods : pd.DataFrame # Больше не возвращаем, т.к. можем получить снаружи
     """
-    # Определяем максимальное количество масштабов
-    if max_scales is None:
-        max_scales = min(100, len(time_series) // 2)
+    # --- Определяем временной шаг --- 
+    time_delta = get_time_delta(time_series_pd.index)
     
-    # Получаем вейвлет-коэффициенты и масштабы с периодами
-    coef, freqs, periods = wavelet_transform(
-        time_series,
-        mother_wavelet=mother_wavelet,
-        num_scales=max_scales,
-        return_periods=True
-    )
+    # --- Вычисление или использование переданных данных --- 
+    if coef is None or periods_meas is None:
+         if max_scales is None: max_scales = min(100, max(1, len(time_series_pd) // 2))
+         # Вейвлет-преобразование (если не передано)
+         transform_result = wavelet_transform(
+             time_series_pd,
+             mother_wavelet=mother_wavelet,
+             num_scales=max_scales,
+             return_periods=True
+         )
+         if len(transform_result) != 3 or transform_result[0].size == 0:
+             return go.Figure() # Возвращаем пустую фигуру
+         coef, _, periods_meas = transform_result # _ для freqs
+
+    if significant_periods_df is None:
+         # Находим значимые периоды (если не переданы)
+         # Передаем coef и periods_meas, чтобы избежать повторного CWT
+         significant_periods_df = find_significant_periods_wavelet(
+             time_series_pd, 
+             mother_wavelet=mother_wavelet, 
+             num_scales=max_scales if max_scales is not None else (min(100, max(1, len(time_series_pd) // 2))), 
+             power_threshold=0.1,
+             coef=coef, # Передаем рассчитанные/полученные coef
+             periods_meas=periods_meas # Передаем рассчитанные/полученные periods_meas
+         )
+    # -----------------------------------------------------
     
-    # Вычисляем мощность для каждого периода
+    # Проверка наличия данных после вычислений/получения
+    if coef is None or coef.size == 0 or periods_meas is None or periods_meas.size == 0:
+        st.warning("Нет данных коэффициентов или периодов для построения спектра мощности.")
+        return go.Figure()
+
+    # Расчет мощности
     power = np.abs(coef) ** 2
-    
-    # Используем комбинацию средней и максимальной мощности для лучшей визуализации
     mean_power = np.mean(power, axis=1)
     max_power = np.max(power, axis=1)
     combined_power = 0.7 * mean_power + 0.3 * max_power
     
-    # Находим значимые периоды используя точно те же параметры, что и в основном анализе
-    significant_periods = find_significant_periods_wavelet(
-        time_series, 
-        mother_wavelet=mother_wavelet, 
-        num_scales=max_scales,
-        power_threshold=0.1
-    )
+    # significant_periods больше не рассчитывается здесь, он либо передан, либо рассчитан выше
     
-    # Создаем графики спектра мощности
     fig = go.Figure()
     
-    # Исходный ряд (в отдельный subplot для лучшей визуализации)
-    fig.add_trace(go.Scatter(
-        x=time_series.index if hasattr(time_series, 'index') else np.arange(len(time_series)),
-        y=time_series if isinstance(time_series, pd.Series) else time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series,
-        mode='lines',
-        name='Исходный ряд',
-        visible='legendonly'  # Скрываем по умолчанию для фокуса на спектре
-    ))
+    # Исходный ряд
+    ts_index = time_series_pd.index
+    ts_values = time_series_pd.values
+    if isinstance(time_series_pd, pd.DataFrame): ts_values = ts_values[:, 0]
+    fig.add_trace(go.Scatter(x=ts_index, y=ts_values, mode='lines', name='Исходный ряд', visible='legendonly'))
     
-    # Определяем максимальный период для отображения (не более 2x от максимального значимого периода)
-    max_period_to_show = None
-    if not significant_periods.empty:
-        max_detected_period = significant_periods['Период'].max()
-        # Ограничиваем максимальный отображаемый период, но не менее 1000
-        max_period_to_show = max(1000, min(max_detected_period * 2, periods.max()))
-    else:
-        # Если нет значимых периодов, показываем все до разумного предела
-        max_period_to_show = min(1000, periods.max())
-    
-    # Фильтруем периоды и соответствующие мощности для отображения
-    display_mask = periods <= max_period_to_show
-    display_periods = periods[display_mask]
-    normalized_power = combined_power / np.max(combined_power)
-    display_power = normalized_power[display_mask]
-    
-    # Основной спектр мощности (комбинированный)
-    fig.add_trace(go.Scatter(
-        x=display_periods,
-        y=display_power,
-        mode='lines',
-        name='Спектр мощности',
-        line=dict(color='red', width=2)
-    ))
-    
-    # Отметки для значимых периодов - для каждого периода из датафрейма
-    if not significant_periods.empty:
-        # Создаем массивы для всех периодов
-        period_points = []
-        power_points = []
-        text_labels = []
+    # --- Подготовка данных для графика спектра --- 
+    finite_periods_mask = np.isfinite(periods_meas) & (periods_meas > 0)
+    if not np.any(finite_periods_mask):
+        st.warning("Нет конечных положительных периодов для отображения спектра.")
+        return fig # Возвращаем фигуру с исходным рядом
         
-        for i, row in significant_periods.iterrows():
-            # Используем точные значения из таблицы без округления для согласованности
-            period = row['Период']
-            # Пропускаем периоды вне диапазона отображения
-            if period > max_period_to_show:
+    periods_meas_finite = periods_meas[finite_periods_mask]
+    # Убедимся, что combined_power соответствует periods_meas по размеру
+    if combined_power.shape[0] != periods_meas.shape[0]:
+         st.error("Размерности мощности и периодов не совпадают после фильтрации!")
+         # Пытаемся отфильтровать combined_power так же
+         if combined_power.shape[0] == finite_periods_mask.shape[0]:
+              combined_power_finite = combined_power[finite_periods_mask]
+         else:
+              return fig # Не можем продолжить безопасно
+    else:
+         combined_power_finite = combined_power[finite_periods_mask]
+    
+    # Нормализация мощности
+    max_comb_power = np.max(combined_power_finite)
+    normalized_power_finite = combined_power_finite / max_comb_power if max_comb_power > 0 else np.zeros_like(combined_power_finite)
+
+    # Определяем диапазон отображения
+    max_period_meas_to_show = None
+    # Используем переданный/рассчитанный DataFrame significant_periods_df
+    if significant_periods_df is not None and not significant_periods_df.empty and 'Период (изм.)' in significant_periods_df.columns:
+         try:
+             # Используем числовую колонку 'Период (изм.)'
+             max_detected_period_meas = significant_periods_df['Период (изм.)'].max()
+             max_period_meas_to_show = max(10, min(max_detected_period_meas * 2, periods_meas_finite.max()))
+         except Exception as e:
+              print(f"Ошибка при определении max_period_to_show: {e}")
+              max_period_meas_to_show = min(1000, periods_meas_finite.max())
+    else:
+        max_period_meas_to_show = min(1000, periods_meas_finite.max())
+        
+    min_period_meas_to_show = max(1, periods_meas_finite.min())
+
+    display_mask = (periods_meas_finite >= min_period_meas_to_show) & (periods_meas_finite <= max_period_meas_to_show)
+    display_periods_meas = periods_meas_finite[display_mask]
+    display_power_norm = normalized_power_finite[display_mask]
+    
+    if display_periods_meas.size == 0 or display_power_norm.size == 0:
+         st.warning("Нет данных для отображения спектра мощности в выбранном диапазоне периодов.")
+    else:
+         # --- График спектра мощности --- 
+         fig.add_trace(go.Scatter(
+             x=display_periods_meas, 
+             y=display_power_norm,
+             mode='lines',
+             name='Спектр мощности',
+             line=dict(color='red', width=2),
+             customdata=np.array([format_period(p, time_delta, selected_unit_key) for p in display_periods_meas]),
+             hovertemplate = '<b>Период</b>: %{customdata}<br>' +
+                             '(Измерения: %{x:.1f})<br>'+
+                             'Мощность: %{y:.3f}<extra></extra>' 
+         ))
+
+    # --- Отметки для значимых периодов --- 
+    # Используем переданный/рассчитанный DataFrame significant_periods_df
+    if significant_periods_df is not None and not significant_periods_df.empty and 'Период (изм.)' in significant_periods_df.columns:
+        period_points_meas = []
+        power_points = []
+        text_labels = [] 
+        annotation_labels = []
+        
+        for i, row in significant_periods_df.iterrows():
+            try:
+                period_meas_val = float(row['Период (изм.)']) # Колонка уже числовая
+                power_val = float(row['Мощность'])
+                # Форматируем здесь для отображения
+                period_formatted_val = format_period(period_meas_val, time_delta, selected_unit_key)
+                period_meas_formatted = format_period(period_meas_val, None, MEASUREMENT_UNIT_KEY)
+            except Exception as e:
+                print(f"Ошибка обработки строки significant_periods: {row}, {e}")
                 continue
-                
-            # Находим ближайший индекс в массиве периодов
-            idx = np.argmin(np.abs(periods - period))
-            actual_power = normalized_power[idx]
+
+            if not (min_period_meas_to_show <= period_meas_val <= max_period_meas_to_show) or not np.isfinite(period_meas_val):
+                continue
             
-            period_points.append(period)
-            power_points.append(actual_power)
-            text_labels.append(f"{row['Период (округленно)']}")
+            period_points_meas.append(period_meas_val)
+            power_points.append(power_val) 
+            text_labels.append(f"{period_formatted_val}<br>({period_meas_formatted})<br>Мощность: {power_val:.3f}")
+            annotation_labels.append(period_formatted_val)
             
-            # Добавляем вертикальную линию для каждого периода
             fig.add_vline(
-                x=period,
-                line=dict(color="green", width=2, dash="dash"),
-                opacity=0.8,
-                annotation_text=f"{row['Период (округленно)']}",
+                x=period_meas_val,
+                line=dict(color="green", width=1, dash="dash"),
+                opacity=0.7,
+                annotation_text=period_formatted_val, 
                 annotation_position="top right",
-                annotation_font=dict(size=14, color='black', family='Arial Black')
+                annotation_font=dict(size=12, color='green')
             )
         
-        # Добавляем все значимые периоды как одну точечную серию с большими маркерами
-        if period_points:  # Проверяем, что список не пустой
+        if period_points_meas:
             fig.add_trace(go.Scatter(
-                x=period_points,
+                x=period_points_meas,
                 y=power_points,
-                mode='markers+text',
-                text=text_labels,
-                textposition='top center',
-                marker=dict(size=16, color='green', symbol='circle', line=dict(width=2, color='black')),
-                name='Значимые периоды'
+                mode='markers', 
+                marker=dict(size=10, color='green', symbol='circle-open', line=dict(width=2, color='green')),
+                name='Значимые периоды',
+                hovertemplate = '<b>ЗНАЧИМЫЙ ПЕРИОД</b><br>' + 
+                                '%{text}<extra></extra>', 
+                text = text_labels
             ))
-    
-    # Создаем логарифмические метки для оси X в человекочитаемом формате
-    tickvals = []
-    ticktext = []
-    
-    # Определяем диапазон периодов для отображения на шкале
-    min_period = max(1, min(display_periods))
-    
-    # Создаем разумные метки для логарифмической шкалы
-    if max_period_to_show <= 10:
-        # Для малых периодов используем линейную шкалу
-        tickvals = list(range(1, int(max_period_to_show) + 1))
-        ticktext = [str(x) for x in tickvals]
-    elif max_period_to_show <= 100:
-        # Для средних периодов используем шаг 10
-        tickvals = [1, 2, 5, 10, 20, 50, 100]
-        tickvals = [x for x in tickvals if x <= max_period_to_show]
-        ticktext = [str(x) for x in tickvals]
-    else:
-        # Для больших периодов используем логарифмический шаг
-        base = 10
-        power = 0
-        while base**power <= max_period_to_show:
-            if base**power >= min_period:
-                tickvals.append(base**power)
-                if base**power >= 1000:
-                    ticktext.append(f"{base**power/1000:.0f}K")
-                else:
-                    ticktext.append(str(base**power))
-            power += 1
-            
-            # Добавляем промежуточные значения для лучшего восприятия
-            if base**(power-0.5) <= max_period_to_show and base**(power-0.5) >= min_period and power > 1:
-                mid_val = int(base**(power-0.5))
-                tickvals.append(mid_val)
-                if mid_val >= 1000:
-                    ticktext.append(f"{mid_val/1000:.1f}K")
-                else:
-                    ticktext.append(str(mid_val))
-    
-    # Настройка макета для лучшей визуализации
+
+    # --- Настройка оси X --- 
+    x_tickvals_meas, x_ticktext = get_scale_ticks(
+        min_period_meas_to_show,
+        max_period_meas_to_show, 
+        time_delta,
+        selected_unit_key,
+        num_ticks=8
+    )
+        
     fig.update_layout(
-        title="Анализ периодичностей с помощью вейвлет-преобразования",
-        xaxis_title="Период",
+        title="Анализ периодичностей (Спектр мощности)",
+        xaxis_title=f"Период ({selected_unit_key})",
         yaxis_title="Нормализованная мощность",
         xaxis_type="log",
         xaxis=dict(
-            range=[np.log10(min_period), np.log10(max_period_to_show)],
             tickmode="array",
-            tickvals=tickvals,
-            ticktext=ticktext
+            tickvals=np.exp2(x_tickvals_meas), 
+            ticktext=x_ticktext               
         ),
         legend_title="Легенда",
         hovermode="closest",
-        # Ограничиваем диапазон y для лучшего просмотра пиков
-        yaxis=dict(range=[-0.1, 1.1])
+        yaxis=dict(range=[-0.05, 1.1])
     )
     
-    # Увеличиваем размер маркеров и шрифта подписей для лучшей видимости
-    fig.update_traces(
-        selector=dict(mode='markers+text'),
-        marker=dict(size=16),
-        textfont=dict(size=14, color='black', family='Arial Black')
-    )
-    
-    return fig, significant_periods
+    return fig # Больше не возвращаем significant_periods
+
 
 def plot_periodicity_heatmap(time_series, significant_periods_df, title="Тепловая карта периодичностей"):
     """

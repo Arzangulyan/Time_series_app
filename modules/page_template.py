@@ -17,11 +17,30 @@ def setup_page(title, sidebar_header):
 def load_time_series():
     if "time_series" in st.session_state and st.session_state.time_series is not None:
         time_series = st.session_state.time_series
+        
+        # Получаем информацию о выбранной колонке
+        main_column = st.session_state.get("main_column", None)
+        if main_column and main_column in time_series.columns:
+            st.success(f"Загружен временной ряд с основной колонкой: '{main_column}'")
+        else:
+            if time_series.shape[1] == 1:
+                main_column = time_series.columns[0]
+                st.success(f"Загружен одномерный временной ряд: '{main_column}'")
+            else:
+                st.warning(f"Загружен временной ряд с {time_series.shape[1]} колонками, основная колонка не указана.")
+        
+        # Информация о размере временного ряда
+        st.info(f"Количество записей: {len(time_series)}")
+        
+        # Проверяем тип индекса
+        if isinstance(time_series.index, pd.DatetimeIndex):
+            st.info(f"Временной диапазон: с {time_series.index.min().strftime('%d.%m.%Y %H:%M:%S')} по {time_series.index.max().strftime('%d.%m.%Y %H:%M:%S')}")
     else:
         st.warning(
-            "Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App»"
+            "Отсутствует ряд для анализа. Перейдите во вкладку «Time Series App» и сохраните ряд для дальнейшего анализа."
         )
         st.stop()
+    
     st.subheader("Загруженный ряд")
     display_data(time_series)
     return time_series
