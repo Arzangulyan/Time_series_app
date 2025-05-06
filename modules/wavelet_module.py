@@ -72,20 +72,6 @@ def get_time_delta(index):
                      return median_delta
     return None
 
-# Соотношения между масштабом и периодом для различных вейвлетов
-# Эти соотношения соответствуют теоретическим значениям для данных вейвлетов
-# Источники: Torrence & Compo (1998) для Morlet, 1/pywt.central_frequency для остальных
-# Период (в ед. времени) = factor * scale * sampling_period
-# При sampling_period=1 (т.е. период в измерениях), Период (изм) = factor * scale
-wavelet_period_factors = {
-    "Морле": 1.22,  # Factor based on Torrence & Compo (1998) for omega0=6
-    "Гаусс": 2.51,  # Factor approx. 1 / pywt.central_frequency('gaus1')
-    "Мексиканская шляпа": 4.0,   # Factor approx. 1 / pywt.central_frequency('mexh') (close to 3.974 from T&C)
-    "Симлет": 1.5,   # Factor approx. 1 / pywt.central_frequency('sym5')
-    "Добеши": 1.4,   # Factor approx. 1 / pywt.central_frequency('db8')
-    "Койфлет": 1.4    # Factor approx. 1 / pywt.central_frequency('coif5') (corrected from 1.2)
-}
-
 # Кодовые имена вейвлетов для PyWavelets
 mother_switcher = {
     "Морле": 'morl',
@@ -163,6 +149,7 @@ def wavelet_transform(time_series, mother_wavelet="Морле", num_scales=256, 
         Иначе (коэффициенты, частоты).
         В случае ошибки возвращает кортеж с пустыми массивами.
     """
+    print(f"[wavelet_module.py | wavelet_transform] Начало. Вейвлет: {mother_wavelet}, макс.масштабы: {num_scales}, длина ряда: {len(time_series)}")
     # --- ИСПРАВЛЕНИЕ ТИПОВ: Явное преобразование к numpy array --- 
     if isinstance(time_series, (pd.Series, pd.DataFrame)):
         signal = np.array(time_series.iloc[:, 0].values if isinstance(time_series, pd.DataFrame) else time_series.values)
@@ -177,7 +164,6 @@ def wavelet_transform(time_series, mother_wavelet="Морле", num_scales=256, 
          try:
              signal = signal.astype(np.float64)
          except ValueError:
-             st.error("Ошибка: Входные данные содержат нечисловые значения, которые не удалось преобразовать.")
              if return_periods:
                  return np.array([]), np.array([]), np.array([])
              else:
@@ -237,19 +223,64 @@ def wavelet_transform(time_series, mother_wavelet="Морле", num_scales=256, 
             return np.array([]), np.array([]) # Возвращаем 2 пустых массива
 
     if return_periods:
-        if mother_wavelet in wavelet_period_factors:
-            period_factor = wavelet_period_factors[mother_wavelet]
-            periods = scales * period_factor
-        else:
-            # Обработка случая, когда частота равна 0
-            periods = np.full_like(freqs, np.inf)
-            non_zero_freqs = freqs != 0
-            periods[non_zero_freqs] = 1.0 / freqs[non_zero_freqs]
-            # Замена inf на большое число, если нужно
-            # periods[np.isinf(periods)] = 1e12 
-        return coef, freqs, periods
+        # --- ИЗМЕНЕНИЕ: Используем pywt.scale2frequency --- 
+        # Вычисляем частоты для каждого масштаба
+        # dt=1, так как работаем в "измерениях"
+        try:
+            # --- Проверка существования вейвлета (попытка №3 для линтера) ---
+            all_wavelets = []
+            for family in pywt.families(short=False): # Используем families(), если доступно
+                all_wavelets.extend(pywt.wavelist(family=family, kind='continuous' if wavelet_name in ['morl', 'mexh', 'gaus1'] else 'discrete')) # Адаптируем kind
+            
+            # Убираем дубликаты, если есть
+            all_wavelets = list(set(all_wavelets))
+
+            if wavelet_name not in all_wavelets:
+                # Если families() недоступен или вейвлет не найден, пробуем простой wavelist()
+                # Это менее точно, но может помочь если линтер не знает families()
+                simple_wavelist = pywt.wavelist(kind='continuous') + pywt.wavelist(kind='discrete')
+                if wavelet_name not in list(set(simple_wavelist)):
+                    print(f"Ошибка: Вейвлет '{wavelet_name}' не найден в доступных списках.")
+                    return np.array([]), np.array([]), np.array([])
+            # ----------------------------------------------------------------
+
+            # Применяем scale2frequency к каждому масштабу
+            frequencies = np.array([pywt.scale2frequency(wavelet_name, s, precision=8) for s in scales])
+            # Обработка случая, когда частота равна 0 или None
+            periods = np.full_like(frequencies, np.inf)
+            valid_freqs_mask = (frequencies != 0) & (~np.isnan(frequencies)) & (np.isfinite(frequencies))
+            if np.any(valid_freqs_mask):
+                 safe_frequencies = frequencies[valid_freqs_mask]
+                 periods[valid_freqs_mask][safe_frequencies == 0] = np.inf
+                 periods[valid_freqs_mask][safe_frequencies != 0] = 1.0 / safe_frequencies[safe_frequencies != 0]
+
+        except AttributeError as e_attr: # Если families или wavelist не найдены линтером/версией
+            print(f"Предупреждение: Не удалось проверить вейвлет '{wavelet_name}' через списки PyWavelets ({e_attr}). Продолжение без строгой проверки.")
+            # В этом случае, если wavelet_name некорректен, scale2frequency все равно вызовет ошибку ниже.
+            try:
+                frequencies = np.array([pywt.scale2frequency(wavelet_name, s, precision=8) for s in scales])
+                periods = np.full_like(frequencies, np.inf)
+                valid_freqs_mask = (frequencies != 0) & (~np.isnan(frequencies)) & (np.isfinite(frequencies))
+                if np.any(valid_freqs_mask):
+                    safe_frequencies = frequencies[valid_freqs_mask]
+                    periods[valid_freqs_mask][safe_frequencies == 0] = np.inf
+                    periods[valid_freqs_mask][safe_frequencies != 0] = 1.0 / safe_frequencies[safe_frequencies != 0]
+            except Exception as e_scale:
+                print(f"Ошибка при вычислении частот/периодов (после предупреждения о проверке): {e_scale}")
+                return np.array([]), np.array([]), np.array([])
+
+        except Exception as e: # Общая ошибка при вычислениях
+            print(f"Ошибка при вычислении частот/периодов через scale2frequency для {wavelet_name}: {e}")
+            return np.array([]), np.array([]), np.array([])
+        # -------------------------------------------------
+            
+        print("[wavelet_module.py | wavelet_transform] Завершение (с периодами).")
+        return coef, frequencies, periods # Возвращаем новые частоты и периоды
     else:
-        return coef, freqs
+        # Если периоды не нужны, возвращаем частоты, которые вернул CWT
+        # (они могут немного отличаться от scale2frequency)
+        print("[wavelet_module.py | wavelet_transform] Завершение (без периодов, только частоты).")
+        return coef, freqs 
 
 # --- ИЗМЕНЕНИЕ: get_scale_ticks теперь принимает time_delta и unit --- 
 def get_scale_ticks(min_period_meas, max_period_meas, time_delta=None, target_unit_key="Измерения", num_ticks=6):
@@ -464,6 +495,7 @@ def find_significant_periods_wavelet(time_series_pd, mother_wavelet="Морле"
         'Период (изм.)', 'Мощность', 
         'Период (формат.)' (отформатированный в единицах по умолчанию или измерениях)
     """
+    print(f"[wavelet_module.py | find_significant_periods_wavelet] Начало. Вейвлет: {mother_wavelet}, макс.масштабы: {num_scales}")
     # --- Получение данных и индекса --- 
     if isinstance(time_series_pd, (pd.Series, pd.DataFrame)):
         time_series = np.array(time_series_pd.iloc[:, 0].values if isinstance(time_series_pd, pd.DataFrame) else time_series_pd.values)
@@ -528,10 +560,7 @@ def find_significant_periods_wavelet(time_series_pd, mother_wavelet="Морле"
          
     power = np.abs(coef) ** 2
     combined_power = 0.7 * np.mean(power, axis=1) + 0.3 * np.max(power, axis=1)
-    # Убрано вычисление периодов, т.к. они либо переданы, либо посчитаны выше
-    # if mother_wavelet in wavelet_period_factors:
-    #     periods = scales * wavelet_period_factors[mother_wavelet]
-    # ...
+    
     if np.all(np.isinf(periods_meas)) or combined_power.size == 0: return pd.DataFrame()
 
     # Нормализация мощности
@@ -581,6 +610,7 @@ def find_significant_periods_wavelet(time_series_pd, mother_wavelet="Морле"
     results_df = results_df.sort_values('Мощность', ascending=False)
     results_df = results_df.drop_duplicates(subset=['Период (окр.)'], keep='first')
     results_df = results_df.sort_values('Мощность', ascending=False)
+    print(f"[wavelet_module.py | find_significant_periods_wavelet] Завершение. Возвращено {len(results_df)} значимых периодов.")
     return results_df[['Период (изм.)', 'Мощность']].head(max_periods) # Возвращаем нужные колонки
 
 # --- ИЗМЕНЕНИЕ: plot_wavelet_periodicity_analysis принимает рассчитанные данные --- 
