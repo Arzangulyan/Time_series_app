@@ -2,6 +2,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import App_descriptions_streamlit as txt
+import time # Импортируем time
 from modules.wavelet_module import (
     wavelet_transform, 
     plot_wavelet_transform, 
@@ -32,6 +33,7 @@ def reset_wavelet_calculation_flag():
     st.session_state.wavelet_significant_periods_df = pd.DataFrame() # Пустой DataFrame
     st.session_state.wavelet_ts_processed_for_plot = None
     st.session_state.wavelet_freqs_calc = None
+    st.session_state.wavelet_calculation_time = None # Сбрасываем время расчета
 
 # --- Кэшированная функция для вычисления значимых периодов --- 
 @st.cache_data
@@ -137,7 +139,8 @@ def render_wavelet_page():
         ('wavelet_significant_periods_df', pd.DataFrame()),
         ('wavelet_ts_processed_for_plot', None),
         ('wavelet_freqs_calc', None),
-        ('current_agg_rule', 'none') # Для хранения выбранного правила агрегации
+        ('current_agg_rule', 'none'), # Для хранения выбранного правила агрегации
+        ('wavelet_calculation_time', None) # Инициализируем время расчета
     ]:
         if key not in st.session_state:
             st.session_state[key] = default_val
@@ -270,7 +273,9 @@ def render_wavelet_page():
             st.warning("Пожалуйста, выберите материнский вейвлет.")
             st.stop()
         
+        st.session_state.wavelet_calculation_time = None # Сбрасываем перед новым расчетом
         with st.spinner("Выполнение вейвлет-преобразования и поиска пиков..."):
+            start_time = time.time() # Время начала расчета
             ts_hash = pd.util.hash_pandas_object(time_series)
             actual_agg_rule = st.session_state.get('current_agg_rule', 'none')
 
@@ -316,6 +321,9 @@ def render_wavelet_page():
                 st.session_state.wavelet_results_calculated = False # Явный сброс
                 st.error("Ошибка при выполнении расчетов. Коэффициенты вейвлет-преобразования не получены.")
                 reset_wavelet_calculation_flag() # Очистка состояния
+            
+            end_time = time.time() # Время окончания расчета
+            st.session_state.wavelet_calculation_time = end_time - start_time # Сохраняем время
 
     # --- Отображение результатов --- 
     if st.session_state.get('wavelet_results_calculated', False):
@@ -324,9 +332,11 @@ def render_wavelet_page():
            st.session_state.wavelet_periods_meas_original_scale is None or \
            st.session_state.wavelet_significant_periods_df is None: # significant_periods_df может быть пустым, это нормально
             st.error("Результаты расчета отсутствуют или некорректны для отображения. Попробуйте нажать 'Рассчитать'.")
-            # Можно добавить кнопку для принудительной очистки состояния здесь или просто вывести сообщение
-            # reset_wavelet_calculation_flag() # Не будем сбрасывать автоматом, дадим пользователю нажать кнопку
             st.stop()
+        
+        # Отображаем время расчета, если оно есть
+        if st.session_state.get('wavelet_calculation_time') is not None:
+            st.caption(f"Время выполнения расчетов: {st.session_state.wavelet_calculation_time:.3f} сек.")
             
         time_delta = get_time_delta(time_series.index) 
 
@@ -335,20 +345,22 @@ def render_wavelet_page():
         # Проверка перед использованием periods_meas_original_scale
         if st.session_state.wavelet_periods_meas_original_scale is None or len(st.session_state.wavelet_periods_meas_original_scale) == 0:
             st.warning("Данные о периодах для вейвлет-спектра отсутствуют. Тепловая карта не может быть построена.")
-        else:
-            min_period_meas, max_period_meas = st.session_state.wavelet_periods_meas_original_scale.min(), st.session_state.wavelet_periods_meas_original_scale.max()
-            tickvals_log, ticktext = get_scale_ticks(min_period_meas, max_period_meas, time_delta, str(selected_unit_key))
+        # else: # Временно отключаем отображение тепловой карты для диагностики
+        #     min_period_meas, max_period_meas = st.session_state.wavelet_periods_meas_original_scale.min(), st.session_state.wavelet_periods_meas_original_scale.max()
+        #     tickvals_log, ticktext = get_scale_ticks(min_period_meas, max_period_meas, time_delta, str(selected_unit_key))
             
-            fig_heatmap = plot_wavelet_transform(
-                time_series, 
-                st.session_state.wavelet_coef, 
-                st.session_state.wavelet_freqs_calc, 
-                st.session_state.wavelet_periods_meas_original_scale, 
-                tickvals_log, 
-                ticktext, 
-                str(selected_unit_key) # Явное преобразование
-            )
-            st.plotly_chart(fig_heatmap, use_container_width=True)
+        #     fig_heatmap = plot_wavelet_transform(
+        #         time_series, 
+        #         st.session_state.wavelet_coef, 
+        #         st.session_state.wavelet_freqs_calc, 
+        #         st.session_state.wavelet_periods_meas_original_scale, 
+        #         tickvals_log, 
+        #         ticktext, 
+        #         str(selected_unit_key) # Явное преобразование
+        #     )
+        #     st.plotly_chart(fig_heatmap, use_container_width=True)
+        else:
+            st.info("Отображение тепловой карты временно отключено для диагностики.")
 
         st.subheader("Наиболее значимые периоды")
         if st.session_state.wavelet_significant_periods_df is not None and not st.session_state.wavelet_significant_periods_df.empty:

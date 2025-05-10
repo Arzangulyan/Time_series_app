@@ -227,21 +227,11 @@ def wavelet_transform(time_series, mother_wavelet="Морле", num_scales=256, 
         # Вычисляем частоты для каждого масштаба
         # dt=1, так как работаем в "измерениях"
         try:
-            # --- Проверка существования вейвлета (попытка №3 для линтера) ---
-            all_wavelets = []
-            for family in pywt.families(short=False): # Используем families(), если доступно
-                all_wavelets.extend(pywt.wavelist(family=family, kind='continuous' if wavelet_name in ['morl', 'mexh', 'gaus1'] else 'discrete')) # Адаптируем kind
-            
-            # Убираем дубликаты, если есть
-            all_wavelets = list(set(all_wavelets))
-
-            if wavelet_name not in all_wavelets:
-                # Если families() недоступен или вейвлет не найден, пробуем простой wavelist()
-                # Это менее точно, но может помочь если линтер не знает families()
-                simple_wavelist = pywt.wavelist(kind='continuous') + pywt.wavelist(kind='discrete')
-                if wavelet_name not in list(set(simple_wavelist)):
-                    print(f"Ошибка: Вейвлет '{wavelet_name}' не найден в доступных списках.")
-                    return np.array([]), np.array([]), np.array([])
+            # --- УДАЛЕНО: Блок проверки существования вейвлета через families/wavelist ---
+            # Этот блок мог вызывать конфликты или ошибки из-за версий PyWavelets
+            # или проблем с обнаружением атрибутов линтером.
+            # Будем полагаться на то, что pywt.scale2frequency сам вызовет ошибку
+            # при некорректном имени вейвлета.
             # ----------------------------------------------------------------
 
             # Применяем scale2frequency к каждому масштабу
@@ -251,23 +241,28 @@ def wavelet_transform(time_series, mother_wavelet="Морле", num_scales=256, 
             valid_freqs_mask = (frequencies != 0) & (~np.isnan(frequencies)) & (np.isfinite(frequencies))
             if np.any(valid_freqs_mask):
                  safe_frequencies = frequencies[valid_freqs_mask]
-                 periods[valid_freqs_mask][safe_frequencies == 0] = np.inf
-                 periods[valid_freqs_mask][safe_frequencies != 0] = 1.0 / safe_frequencies[safe_frequencies != 0]
+                 # Исправляем индексацию для безопасного присваивания
+                 temp_periods = periods[valid_freqs_mask]
+                 temp_periods[safe_frequencies == 0] = np.inf
+                 temp_periods[safe_frequencies != 0] = 1.0 / safe_frequencies[safe_frequencies != 0]
+                 periods[valid_freqs_mask] = temp_periods
 
-        except AttributeError as e_attr: # Если families или wavelist не найдены линтером/версией
-            print(f"Предупреждение: Не удалось проверить вейвлет '{wavelet_name}' через списки PyWavelets ({e_attr}). Продолжение без строгой проверки.")
-            # В этом случае, если wavelet_name некорректен, scale2frequency все равно вызовет ошибку ниже.
-            try:
-                frequencies = np.array([pywt.scale2frequency(wavelet_name, s, precision=8) for s in scales])
-                periods = np.full_like(frequencies, np.inf)
-                valid_freqs_mask = (frequencies != 0) & (~np.isnan(frequencies)) & (np.isfinite(frequencies))
-                if np.any(valid_freqs_mask):
-                    safe_frequencies = frequencies[valid_freqs_mask]
-                    periods[valid_freqs_mask][safe_frequencies == 0] = np.inf
-                    periods[valid_freqs_mask][safe_frequencies != 0] = 1.0 / safe_frequencies[safe_frequencies != 0]
-            except Exception as e_scale:
-                print(f"Ошибка при вычислении частот/периодов (после предупреждения о проверке): {e_scale}")
-                return np.array([]), np.array([]), np.array([])
+        # except AttributeError as e_attr: # Если families или wavelist не найдены линтером/версией
+        #     print(f"Предупреждение: Не удалось проверить вейвлет '{wavelet_name}' через списки PyWavelets ({e_attr}). Продолжение без строгой проверки.")
+        #     # В этом случае, если wavelet_name некорректен, scale2frequency все равно вызовет ошибку ниже.
+        #     try:
+        #         frequencies = np.array([pywt.scale2frequency(wavelet_name, s, precision=8) for s in scales])
+        #         periods = np.full_like(frequencies, np.inf)
+        #         valid_freqs_mask = (frequencies != 0) & (~np.isnan(frequencies)) & (np.isfinite(frequencies))
+        #         if np.any(valid_freqs_mask):
+        #             safe_frequencies = frequencies[valid_freqs_mask]
+        #             temp_periods = periods[valid_freqs_mask]
+        #             temp_periods[safe_frequencies == 0] = np.inf
+        #             temp_periods[safe_frequencies != 0] = 1.0 / safe_frequencies[safe_frequencies != 0]
+        #             periods[valid_freqs_mask] = temp_periods
+        #     except Exception as e_scale:
+        #         print(f"Ошибка при вычислении частот/периодов (после предупреждения о проверке): {e_scale}")
+        #         return np.array([]), np.array([]), np.array([])
 
         except Exception as e: # Общая ошибка при вычислениях
             print(f"Ошибка при вычислении частот/периодов через scale2frequency для {wavelet_name}: {e}")
@@ -408,44 +403,79 @@ def plot_wavelet_transform(time_series_pd, coef, freqs, periods_meas, tickvals_l
     selected_unit_key : str
         Выбранная единица измерения периода (ключ из TIME_UNITS).
     """
-    
+    print(f"[wavelet_module.py | plot_wavelet_transform] Начало. Coef shape: {coef.shape if coef is not None else 'N/A'}, Periods_meas len: {len(periods_meas) if periods_meas is not None else 'N/A'}")
     # Определяем временной шаг
     time_delta = get_time_delta(time_series_pd.index)
     
     # Создаем массив текстовых строк для hovertext
-    hover_texts = []
-    for i in range(len(periods_meas)):
-        row_texts = []
-        period_val_meas = periods_meas[i]
-        # Форматируем период для hover text
-        period_formatted = format_period(period_val_meas, time_delta, selected_unit_key)
-        period_meas_formatted = format_period(period_val_meas, None, "Измерения") # Всегда добавляем измерения
-        
-        for j in range(coef.shape[1]):
-            time_val = time_series_pd.index[j] if hasattr(time_series_pd, 'index') else j
-            power_val = round(np.abs(coef)[i, j], 2)
+    hover_texts = None # Инициализируем hover_texts
+    hover_info_setting = 'text' # По умолчанию показываем кастомный текст
+
+    # Ограничение на размер данных для генерации hover_texts
+    MAX_TIME_POINTS_FOR_HOVERTEXT = 10000 # Порог
+
+    if coef is not None and coef.shape[1] > MAX_TIME_POINTS_FOR_HOVERTEXT:
+        print(f"[wavelet_module.py | plot_wavelet_transform] Слишком много временных точек ({coef.shape[1]}), отключаю детальный hovertext.")
+        hover_info_setting = 'z' # Показываем только значение z (мощность)
+    elif coef is not None: # coef существует и количество точек в норме
+        hover_texts_list = []
+        for i in range(len(periods_meas)):
+            row_texts = []
+            period_val_meas = periods_meas[i]
+            # Форматируем период для hover text
+            period_formatted = format_period(period_val_meas, time_delta, selected_unit_key)
+            period_meas_formatted = format_period(period_val_meas, None, "Измерения") # Всегда добавляем измерения
             
-            # Собираем текст для hover
-            text = f"Время: {time_val}<br>"
-            text += f"Период: {period_formatted}<br>"
-            if selected_unit_key != "Измерения": # Показываем измерения, если они не выбраны основной единицей
-                 text += f"({period_meas_formatted})<br>"
-            text += f"Мощность: {power_val}"
-            row_texts.append(text)
-        hover_texts.append(row_texts)
+            for j in range(coef.shape[1]):
+                time_val = time_series_pd.index[j] if hasattr(time_series_pd, 'index') else j
+                power_val = round(np.abs(coef)[i, j], 2)
+                
+                # Собираем текст для hover
+                text = f"Время: {time_val}<br>"
+                text += f"Период: {period_formatted}<br>"
+                if selected_unit_key != "Измерения": # Показываем измерения, если они не выбраны основной единицей
+                     text += f"({period_meas_formatted})<br>"
+                text += f"Мощность: {power_val}"
+                row_texts.append(text)
+            hover_texts_list.append(row_texts)
+        hover_texts = np.array(hover_texts_list)
+        print(f"[wavelet_module.py | plot_wavelet_transform] Hover_texts shape: {hover_texts.shape}") # Логируем размер hover_texts
+    else:
+        # Случай, если coef is None, хотя это должно быть обработано раньше
+        print("[wavelet_module.py | plot_wavelet_transform] Коэффициенты (coef) отсутствуют, hovertext не будет сгенерирован.")
+        hover_info_setting = 'skip' # Ничего не показываем
+
+    # fig = go.Figure(data=go.Heatmap(
+    #     z=np.abs(coef),
+    #     x=time_series_pd.index,
+    #     y=np.log2(periods_meas), # Ось Y всегда в log2 от измерений
+    #     colorscale='Viridis',
+    #     colorbar=dict(title='Мощность'),
+    #     hoverinfo='text', # Управляется hover_info_setting
+    #     text=hover_texts # Будет None, если hover_info_setting не 'text'
+    # ))
+
+    heatmap_data = {}
+    if coef is not None:
+        heatmap_data['z'] = np.abs(coef)
+        heatmap_data['x'] = time_series_pd.index
+        heatmap_data['y'] = np.log2(periods_meas)
+        heatmap_data['colorscale'] = 'Viridis'
+        heatmap_data['colorbar'] = dict(title='Мощность')
+        heatmap_data['hoverinfo'] = hover_info_setting
+        if hover_info_setting == 'text' and hover_texts is not None:
+            heatmap_data['text'] = hover_texts
+        elif hover_info_setting == 'z':
+            # Для hoverinfo='z' можно добавить hovertemplate для лучшего отображения только z
+            heatmap_data['hovertemplate'] = 'Мощность: %{z:.2f}<extra></extra>'
     
-    hover_texts = np.array(hover_texts)
-    
-    fig = go.Figure(data=go.Heatmap(
-        z=np.abs(coef),
-        x=time_series_pd.index,
-        y=np.log2(periods_meas), # Ось Y всегда в log2 от измерений
-        colorscale='Viridis',
-        colorbar=dict(title='Мощность'),
-        hoverinfo='text',
-        text=hover_texts
-    ))
-    
+    fig = go.Figure()
+    if heatmap_data: # Добавляем слой, только если есть данные
+        fig.add_trace(go.Heatmap(**heatmap_data))
+    else:
+        # Можно добавить сообщение или просто оставить пустой график
+        fig.update_layout(title="Вейвлет-преобразование (нет данных для отображения)")
+
     fig.update_layout(
         title="Вейвлет-преобразование",
         xaxis_title="Время",
@@ -643,6 +673,7 @@ def plot_wavelet_periodicity_analysis(
     fig : plotly.graph_objects.Figure
     # significant_periods : pd.DataFrame # Больше не возвращаем, т.к. можем получить снаружи
     """
+    print(f"[wavelet_module.py | plot_wavelet_periodicity_analysis] Начало. Coef shape: {coef.shape if coef is not None else 'N/A'}, Periods_meas len: {len(periods_meas) if periods_meas is not None else 'N/A'}, Sig.Periods DF len: {len(significant_periods_df) if significant_periods_df is not None else 'N/A'}")
     # --- Определяем временной шаг --- 
     time_delta = get_time_delta(time_series_pd.index)
     
@@ -739,6 +770,7 @@ def plot_wavelet_periodicity_analysis(
     if display_periods_meas.size == 0 or display_power_norm.size == 0:
          st.warning("Нет данных для отображения спектра мощности в выбранном диапазоне периодов.")
     else:
+         print(f"[wavelet_module.py | plot_wavelet_periodicity_analysis] Display_periods_meas size for spectrum: {display_periods_meas.size}") # Логируем размер
          # --- График спектра мощности --- 
          fig.add_trace(go.Scatter(
              x=display_periods_meas, 
@@ -823,7 +855,7 @@ def plot_wavelet_periodicity_analysis(
         hovermode="closest",
         yaxis=dict(range=[-0.05, 1.1])
     )
-    
+    print(f"[wavelet_module.py | plot_wavelet_periodicity_analysis] Завершение.")
     return fig # Больше не возвращаем significant_periods
 
 
