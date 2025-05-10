@@ -61,14 +61,30 @@ def check_stationarity(series: pd.Series, alpha: float = 0.05) -> Dict[str, Any]
     series = series.dropna()
     
     # Тест ADF
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore")
-        adf_result = adfuller(series, regression='ct')
-    
-    adf_p_value = adf_result[1]
-    adf_statistic = adf_result[0]
-    adf_critical_values = adf_result[4]
-    adf_is_stationary = adf_p_value < alpha
+    adf_p_value = None
+    adf_statistic = None
+    adf_critical_values = {}
+    adf_is_stationary = False
+
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore")
+            adf_result = adfuller(series, regression='ct')
+        
+        adf_p_value = adf_result[1]
+        adf_statistic = adf_result[0]
+        adf_critical_values = adf_result[4]
+        adf_is_stationary = adf_p_value < alpha
+    except ValueError as e:
+        if "x is constant" in str(e):
+            # Handle constant series: non-stationary for ADF
+            adf_p_value = 1.0
+            adf_statistic = np.nan # Or 0.0, or specific indicator
+            adf_critical_values = {key: np.nan for key in ['1%', '5%', '10%']} # Placeholder
+            adf_is_stationary = False
+            warnings.warn("ADF test: Input series is constant. Considered non-stationary.")
+        else:
+            raise e # Re-raise other ValueErrors
     
     # Тест KPSS
     with warnings.catch_warnings():
@@ -780,4 +796,4 @@ def generate_model_report(model: BaseTimeSeriesModel, train: pd.Series, test: Op
         except:
             report['residuals_stationarity'] = "Не удалось выполнить проверку стационарности"
     
-    return report 
+    return report

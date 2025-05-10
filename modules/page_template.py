@@ -1,9 +1,5 @@
 import streamlit as st
 import pandas as pd
-
-
-import streamlit as st
-import pandas as pd
 import markdown2
 from pathlib import Path
 
@@ -17,17 +13,37 @@ def setup_page(title, sidebar_header):
 def load_time_series():
     if "time_series" in st.session_state and st.session_state.time_series is not None:
         time_series = st.session_state.time_series
+
+        # Check if time_series is a DataFrame with 'Timestamp' and 'Value' columns
+        if isinstance(time_series, pd.DataFrame) and 'Timestamp' in time_series.columns and 'Value' in time_series.columns:
+            try:
+                # Convert 'Timestamp' to datetime and set as index, then select 'Value' column
+                time_series['Timestamp'] = pd.to_datetime(time_series['Timestamp'])
+                time_series = time_series.set_index('Timestamp')['Value']
+                st.session_state.time_series = time_series # Update session state
+                st.success("DataFrame converted to Series with 'Timestamp' as index and 'Value' as data.")
+            except Exception as e:
+                st.error(f"Error converting DataFrame to Series: {e}")
+                st.stop()
         
         # Получаем информацию о выбранной колонке
         main_column = st.session_state.get("main_column", None)
-        if main_column and main_column in time_series.columns:
-            st.success(f"Загружен временной ряд с основной колонкой: '{main_column}'")
-        else:
-            if time_series.shape[1] == 1:
-                main_column = time_series.columns[0]
-                st.success(f"Загружен одномерный временной ряд: '{main_column}'")
+
+        if isinstance(time_series, pd.Series):
+            main_column = time_series.name if time_series.name else "Value"
+            st.success(f"Загружен одномерный временной ряд: '{main_column}'")
+        elif isinstance(time_series, pd.DataFrame):
+            if main_column and main_column in time_series.columns:
+                st.success(f"Загружен временной ряд с основной колонкой: '{main_column}'")
             else:
-                st.warning(f"Загружен временной ряд с {time_series.shape[1]} колонками, основная колонка не указана.")
+                if time_series.shape[1] == 1:
+                    main_column = time_series.columns[0]
+                    st.success(f"Загружен одномерный временной ряд: '{main_column}'")
+                else:
+                    st.warning(f"Загружен временной ряд с {time_series.shape[1]} колонками, основная колонка не указана.")
+        else:
+            st.error("Неподдерживаемый тип данных для временного ряда.")
+            st.stop()
         
         # Информация о размере временного ряда
         st.info(f"Количество записей: {len(time_series)}")
