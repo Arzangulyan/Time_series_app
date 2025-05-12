@@ -35,13 +35,10 @@ from .visualization import (
     plot_acf_pacf_plotly,
     plot_forecast,
     plot_forecast_plotly,
+    plot_forecast_matplotlib,  # Добавляем новую функцию
     display_model_information,
     display_differencing_effect,
-    analyze_residuals,
-    plot_residuals_diagnostic,
-    compare_models,
-    display_stationarity_results,
-    display_acf_pacf
+    auto_detect_seasonality
 )
 
 # Импортируем вспомогательные функции
@@ -53,6 +50,18 @@ from .utils import (
     generate_forecast_index,
     format_model_params,
     clean_time_series
+)
+
+# Импортируем функции выбора и оценки моделей
+from .model_selection import (
+    check_stationarity as check_stationarity_advanced,
+    estimate_differencing_order,
+    detect_seasonality,
+    auto_arima,
+    evaluate_model_performance,
+    plot_model_results,
+    generate_model_report,
+    split_train_test  # Add missing function to imports
 )
 
 # Определяем публичный API пакета
@@ -82,13 +91,9 @@ __all__ = [
     'plot_acf_pacf_plotly',
     'plot_forecast',
     'plot_forecast_plotly',
+    'plot_forecast_matplotlib',  # Добавляем новую функцию
     'display_model_information',
     'display_differencing_effect',
-    'analyze_residuals',
-    'plot_residuals_diagnostic',
-    'compare_models',
-    'display_stationarity_results',
-    'display_acf_pacf',
     
     # Вспомогательные функции
     'check_input_series',
@@ -97,5 +102,15 @@ __all__ = [
     'estimate_forecast_horizon',
     'generate_forecast_index',
     'format_model_params',
-    'clean_time_series'
-] 
+    'clean_time_series',
+    
+    # Функции выбора и оценки моделей
+    'check_stationarity_advanced',
+    'estimate_differencing_order',
+    'detect_seasonality',
+    'auto_arima',
+    'evaluate_model_performance',
+    'plot_model_results',
+    'generate_model_report',
+    'split_train_test'  # Add to public API
+]

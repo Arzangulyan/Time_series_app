@@ -247,7 +247,8 @@ def iqr_detection(data: np.ndarray, multiplier: float = 1.5) -> Tuple[np.ndarray
 
 
 @st.cache_data
-def hampel_filter(data: np.ndarray, window: int = 5, sigma: float = 3.0) -> np.ndarray:
+def hampel_filter(data: np.ndarray, window: int = 5, sigma: float = 3.0, 
+                  adaptive_window: bool = False, window_percent: float = 0.5) -> np.ndarray:
     """
     Фильтр Хампеля для обнаружения аномалий.
     
@@ -255,6 +256,8 @@ def hampel_filter(data: np.ndarray, window: int = 5, sigma: float = 3.0) -> np.n
         data: Исходный ряд данных.
         window: Размер окна для расчета медианы.
         sigma: Множитель для определения порога.
+        adaptive_window: Если True, размер окна рассчитывается как процент от длины ряда.
+        window_percent: Процент от длины ряда для размера окна (если adaptive_window=True).
         
     Returns:
         Булев массив с отметками аномалий.
@@ -262,6 +265,11 @@ def hampel_filter(data: np.ndarray, window: int = 5, sigma: float = 3.0) -> np.n
     n = len(data)
     result = np.zeros(n, dtype=bool)
     
+    # Если включен адаптивный размер окна, рассчитываем его
+    if adaptive_window:
+        # Преобразуем процент в количество точек (минимум 5, максимум 20% от длины ряда)
+        window = max(5, min(int(n * window_percent / 100), n // 5))
+        
     # Вычисляем медиану и MAD в скользящем окне
     for i in range(n):
         # Находим границы окна
@@ -321,4 +329,92 @@ def detect_plateau(data: np.ndarray, threshold: float = 1e-3, min_duration: int 
         if duration >= min_duration:
             plateaus.append({'start': start, 'end': n-1})
     
-    return plateaus 
+    return plateaus
+
+
+@st.cache_data
+def add_anomalies_to_existing_data(
+    data: np.ndarray,
+    _time: np.ndarray = None,
+    point_anomalies: Optional[List[Dict[str, Any]]] = None,
+    extended_anomalies: Optional[List[Dict[str, Any]]] = None,
+    sensor_faults: Optional[List[Dict[str, Any]]] = None
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    """
+    Добавление аномалий в существующий временной ряд.
+
+    Args:
+        data: Исходный ряд данных.
+        _time: Временные метки (если None, используется последовательность индексов).
+        point_anomalies: Список словарей с параметрами точечных аномалий.
+        extended_anomalies: Список словарей с параметрами протяженных аномалий.
+        sensor_faults: Список словарей с параметрами отказов датчиков.
+        
+    Returns:
+        Кортеж (данные с аномалиями, информация об аномалиях).
+    """
+    # Создаем копию исходных данных
+    data_with_anomalies = data.copy()
+    
+    # Если временные метки не предоставлены, создаем их
+    if _time is None:
+        _time = np.arange(len(data))
+    
+    # Информация об аномалиях для дальнейшего анализа
+    anomaly_info = []
+    
+    # Добавление точечных аномалий
+    if point_anomalies:
+        for pa in point_anomalies:
+            indices = pa.get('indices', [])
+            amplitude_range = pa.get('amplitude_range', (1, 2))
+            increase = pa.get('increase', True)
+            
+            data_with_anomalies = add_point_anomalies(
+                data_with_anomalies, indices, amplitude_range, increase
+            )
+            
+            for idx in indices:
+                anomaly_info.append({
+                    'type': 'point',
+                    'index': idx,
+                    'increase': increase
+                })
+    
+    # Добавление протяженных аномалий
+    if extended_anomalies:
+        for ea in extended_anomalies:
+            start_idx = ea.get('start_idx', 0)
+            duration = ea.get('duration', 10)
+            level_shift = ea.get('level_shift', 2.0)
+            
+            data_with_anomalies = add_extended_anomaly(
+                data_with_anomalies, start_idx, duration, level_shift
+            )
+            
+            anomaly_info.append({
+                'type': 'extended',
+                'start_idx': start_idx,
+                'duration': duration,
+                'level_shift': level_shift
+            })
+    
+    # Добавление отказов датчиков
+    if sensor_faults:
+        for sf in sensor_faults:
+            start_idx = sf.get('start_idx', 0)
+            duration = sf.get('duration', 5)
+            fault_value = sf.get('fault_value', np.nan)
+            
+            data_with_anomalies = add_sensor_fault(
+                data_with_anomalies, start_idx, duration, fault_value
+            )
+            
+            anomaly_info.append({
+                'type': 'sensor_fault',
+                'start_idx': start_idx,
+                'duration': duration,
+                'fault_value': str(fault_value)  # Преобразуем в строку для JSON-совместимости
+            })
+    
+    return data_with_anomalies, anomaly_info

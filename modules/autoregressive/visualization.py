@@ -477,6 +477,307 @@ def plot_forecast_plotly(model: BaseTimeSeriesModel, steps: int, original_data: 
     return fig
 
 
+def plot_forecast_matplotlib(model, steps=None, original_data=None, train_data=None, test_data=None, title=None):
+    """
+    Создает график прогноза с помощью matplotlib (для экспорта в PDF отчеты).
+    """
+    if steps is None:
+        if test_data is not None:
+            steps = len(test_data)
+        else:
+            steps = 10
+    
+    # Получаем прогноз на тестовый период
+    forecast = model.predict(steps=steps)
+    
+    # Создаем фигуру с достаточным размером для читаемости в PDF
+    plt.figure(figsize=(10, 6))
+    
+    # Строим график исходных данных, если они предоставлены
+    if original_data is not None:
+        plt.plot(original_data.index, original_data, 'gray', alpha=0.5, label='Исходные данные')
+    
+    # Строим график обучающих данных, если они предоставлены
+    if train_data is not None:
+        plt.plot(train_data.index, train_data, 'b-', label='Обучающая выборка')
+    
+    # Строим график тестовых данных, если они предоставлены
+    if test_data is not None:
+        plt.plot(test_data.index, test_data, 'g-', label='Тестовая выборка')
+    
+    # Строим график прогноза
+    plt.plot(forecast.index, forecast, 'r-', linewidth=2, label='Прогноз')
+    
+    # Заголовок, оси и легенда
+    if title:
+        plt.title(title, fontsize=14)
+    plt.xlabel('Время', fontsize=12)
+    plt.ylabel('Значение', fontsize=12)
+    
+    # Улучшенная легенда
+    legend = plt.legend(loc='upper left', fontsize=10, frameon=True)
+    legend.get_frame().set_facecolor('white')
+    legend.get_frame().set_alpha(0.9)
+    
+    # Улучшения для читаемости
+    plt.grid(True, alpha=0.3)
+    plt.tick_params(axis='both', which='major', labelsize=10)
+    
+    # Уменьшаем число делений на оси X для лучшей читаемости
+    ax = plt.gca()
+    if len(forecast) > 20:
+        ax.xaxis.set_major_locator(plt.MaxNLocator(10))
+    
+    # Поворачиваем метки, если они перекрываются
+    plt.xticks(rotation=45, ha='right')
+    
+    plt.tight_layout()
+    
+    return plt.gcf()  # Возвращает текущую фигуру
+
+
+def plot_residuals_diagnostic(model: BaseTimeSeriesModel) -> go.Figure:
+    """
+    Создает диагностические графики для остатков модели.
+    
+    Параметры:
+    -----------
+    model : объект модели с атрибутом fitted_model
+        Обученная авторегрессионная модель
+        
+    Возвращает:
+    -----------
+    plotly.graph_objs.Figure
+        Фигура с графиками диагностики остатков
+    """
+    if not hasattr(model, 'fitted_model') or model.fitted_model is None:
+        raise ValueError("Модель не обучена. Отсутствует атрибут 'fitted_model'.")
+    
+    residuals = model.fitted_model.resid.dropna()
+    
+    # Создаем график с подграфиками (2x2)
+    fig = make_subplots(
+        rows=2, 
+        cols=2, 
+        subplot_titles=(
+            'Остатки',
+            'Гистограмма остатков',
+            'QQ-график остатков',
+            'Остатки vs. Предсказанные значения'
+        )
+    )
+    
+    # 1. График остатков во времени
+    fig.add_trace(
+        go.Scatter(
+            x=residuals.index,
+            y=residuals,
+            mode='lines',
+            name='Остатки',
+            line=dict(color='blue')
+        ),
+        row=1, col=1
+    )
+    
+    # Добавляем горизонтальную линию y=0
+    fig.add_trace(
+        go.Scatter(
+            x=[residuals.index[0], residuals.index[-1]],
+            y=[0, 0],
+            mode='lines',
+            line=dict(color='red', dash='dash'),
+            name='y=0'
+        ),
+        row=1, col=1
+    )
+    
+    # 2. Гистограмма остатков
+    fig.add_trace(
+        go.Histogram(
+            x=residuals,
+            name='Гистограмма',
+            marker=dict(color='blue')
+        ),
+        row=1, col=2
+    )
+    
+    # Добавляем кривую нормального распределения
+    x_range = np.linspace(min(residuals), max(residuals), 100)
+    mean = np.mean(residuals)
+    std = np.std(residuals)
+    pdf = stats.norm.pdf(x_range, mean, std)
+    
+    # Масштабируем PDF к высоте гистограммы
+    hist_count, _ = np.histogram(residuals, bins=30)
+    scale_factor = max(hist_count) / max(pdf) if max(pdf) > 0 else 1
+    
+    fig.add_trace(
+        go.Scatter(
+            x=x_range,
+            y=pdf * scale_factor,
+            mode='lines',
+            name='Нормальное распределение',
+            line=dict(color='red')
+        ),
+        row=1, col=2
+    )
+    
+    # 3. QQ-график
+    try:
+        qq = stats.probplot(residuals, dist='norm')
+        x_values = np.array(qq[0][0])
+        y_values = np.array(qq[0][1])
+        
+        # Добавляем линию y=x (теоретическое нормальное распределение)
+        min_val = min(min(x_values), min(y_values))
+        max_val = max(max(x_values), max(y_values))
+        line_x = np.array([min_val, max_val])
+        line_y = np.array([min_val, max_val])
+        
+        fig.add_trace(
+            go.Scatter(
+                x=line_x,
+                y=line_y,
+                mode='lines',
+                name='Теоретическая линия',
+                line=dict(color='red')
+            ),
+            row=2, col=1
+        )
+        
+        # Добавляем точки QQ-графика
+        fig.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=y_values,
+                mode='markers',
+                name='QQ-график',
+                marker=dict(color='blue')
+            ),
+            row=2, col=1
+        )
+    except Exception as e:
+        warnings.warn(f"Ошибка при построении QQ-графика: {str(e)}")
+    
+    # 4. Остатки vs. Предсказанные значения
+    try:
+        fitted_values = model.fitted_model.fittedvalues.dropna()
+        common_index = residuals.index.intersection(fitted_values.index)
+        
+        if len(common_index) > 0:
+            res_common = residuals.loc[common_index]
+            fit_common = fitted_values.loc[common_index]
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=fit_common,
+                    y=res_common,
+                    mode='markers',
+                    name='Остатки vs. Предсказанные',
+                    marker=dict(color='blue')
+                ),
+                row=2, col=2
+            )
+            
+            # Добавляем горизонтальную линию y=0
+            fig.add_trace(
+                go.Scatter(
+                    x=[min(fit_common), max(fit_common)],
+                    y=[0, 0],
+                    mode='lines',
+                    line=dict(color='red', dash='dash'),
+                    name='y=0'
+                ),
+                row=2, col=2
+            )
+        else:
+            warnings.warn("Не удалось построить график остатков vs. предсказанные значения из-за несовпадения индексов.")
+    except Exception as e:
+        warnings.warn(f"Ошибка при построении графика остатков vs. предсказанные значения: {str(e)}")
+    
+    # Обновляем макет графика
+    fig.update_layout(
+        height=600,
+        showlegend=False,
+        title_text="Диагностика остатков модели"
+    )
+    
+    return fig
+
+
+def plot_residuals_diagnostic_matplotlib(model: BaseTimeSeriesModel) -> plt.Figure:
+    """
+    Создает диагностические графики для остатков модели с использованием matplotlib.
+    
+    Параметры:
+    -----------
+    model : объект модели с атрибутом fitted_model
+        Обученная авторегрессионная модель
+        
+    Возвращает:
+    -----------
+    plt.Figure
+        Фигура с графиками диагностики остатков для отчетов
+    """
+    if not hasattr(model, 'fitted_model') or model.fitted_model is None:
+        raise ValueError("Модель не обучена. Отсутствует атрибут 'fitted_model'.")
+    
+    residuals = model.fitted_model.resid.dropna()
+    
+    # Создаем график с подграфиками (2x2)
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    
+    # 1. График остатков во времени
+    axes[0, 0].plot(residuals.index, residuals, color='blue')
+    axes[0, 0].axhline(y=0, color='red', linestyle='--')
+    axes[0, 0].set_title('Остатки')
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # 2. Гистограмма остатков
+    axes[0, 1].hist(residuals, bins=20, color='blue', alpha=0.7)
+    axes[0, 1].set_title('Гистограмма остатков')
+    
+    # Добавляем кривую нормального распределения
+    x_range = np.linspace(min(residuals), max(residuals), 100)
+    mean = np.mean(residuals)
+    std = np.std(residuals)
+    pdf = stats.norm.pdf(x_range, mean, std)
+    
+    # Масштабируем PDF к высоте гистограммы
+    hist_count, _ = np.histogram(residuals, bins=20)
+    scale_factor = max(hist_count) / max(pdf) if max(pdf) > 0 else 1
+    axes[0, 1].plot(x_range, pdf * scale_factor, 'r-', linewidth=2)
+    
+    # 3. QQ-график
+    try:
+        qq = stats.probplot(residuals, dist='norm')
+        axes[1, 0].plot(qq[0][0], qq[0][1], 'o', color='blue')
+        axes[1, 0].plot(qq[0][0], qq[0][0], 'r-')
+        axes[1, 0].set_title('QQ-график')
+    except Exception as e:
+        axes[1, 0].text(0.5, 0.5, f"Ошибка построения QQ-графика: {str(e)}", 
+                        ha='center', va='center', transform=axes[1, 0].transAxes)
+    
+    # 4. Остатки vs. Предсказанные значения
+    try:
+        fitted_values = model.fitted_model.fittedvalues.dropna()
+        common_index = residuals.index.intersection(fitted_values.index)
+        
+        if len(common_index) > 0:
+            res_common = residuals.loc[common_index]
+            fit_common = fitted_values.loc[common_index]
+            
+            axes[1, 1].scatter(fit_common, res_common, color='blue', alpha=0.7)
+            axes[1, 1].axhline(y=0, color='red', linestyle='--')
+            axes[1, 1].set_title('Остатки vs. Предсказанные')
+    except Exception as e:
+        axes[1, 1].text(0.5, 0.5, f"Ошибка построения графика: {str(e)}", 
+                        ha='center', va='center', transform=axes[1, 1].transAxes)
+    
+    plt.tight_layout()
+    return fig
+
+
 def display_model_information(model: BaseTimeSeriesModel) -> str:
     """
     Формирует строку с информацией о модели.
@@ -693,175 +994,6 @@ def analyze_residuals(model: BaseTimeSeriesModel, significance_level: float = 0.
         'shapiro_test': sw_result,
         'residuals': residuals
     }
-
-
-def plot_residuals_diagnostic(model: BaseTimeSeriesModel) -> go.Figure:
-    """
-    Создает диагностические графики для остатков модели.
-    
-    Параметры:
-    -----------
-    model : объект модели с атрибутом fitted_model
-        Обученная авторегрессионная модель
-        
-    Возвращает:
-    -----------
-    plotly.graph_objs.Figure
-        Фигура с графиками диагностики остатков
-    """
-    if not hasattr(model, 'fitted_model') or model.fitted_model is None:
-        raise ValueError("Модель не обучена. Отсутствует атрибут 'fitted_model'.")
-    
-    residuals = model.fitted_model.resid.dropna()
-    
-    # Создаем график с подграфиками (2x2)
-    fig = make_subplots(
-        rows=2, 
-        cols=2, 
-        subplot_titles=(
-            'Остатки',
-            'Гистограмма остатков',
-            'QQ-график остатков',
-            'Остатки vs. Предсказанные значения'
-        )
-    )
-    
-    # 1. График остатков во времени
-    fig.add_trace(
-        go.Scatter(
-            x=residuals.index,
-            y=residuals,
-            mode='lines',
-            name='Остатки',
-            line=dict(color='blue')
-        ),
-        row=1, col=1
-    )
-    
-    # Добавляем горизонтальную линию y=0
-    fig.add_trace(
-        go.Scatter(
-            x=[residuals.index[0], residuals.index[-1]],
-            y=[0, 0],
-            mode='lines',
-            line=dict(color='red', dash='dash'),
-            name='y=0'
-        ),
-        row=1, col=1
-    )
-    
-    # 2. Гистограмма остатков
-    fig.add_trace(
-        go.Histogram(
-            x=residuals,
-            name='Гистограмма',
-            marker=dict(color='blue')
-        ),
-        row=1, col=2
-    )
-    
-    # Добавляем кривую нормального распределения
-    x_range = np.linspace(min(residuals), max(residuals), 100)
-    mean = np.mean(residuals)
-    std = np.std(residuals)
-    pdf = stats.norm.pdf(x_range, mean, std)
-    
-    # Масштабируем PDF к высоте гистограммы
-    hist_count, _ = np.histogram(residuals, bins=30)
-    scale_factor = max(hist_count) / max(pdf) if max(pdf) > 0 else 1
-    
-    fig.add_trace(
-        go.Scatter(
-            x=x_range,
-            y=pdf * scale_factor,
-            mode='lines',
-            name='Нормальное распределение',
-            line=dict(color='red')
-        ),
-        row=1, col=2
-    )
-    
-    # 3. QQ-график
-    try:
-        qq = stats.probplot(residuals, dist='norm')
-        x_values = np.array(qq[0][0])
-        y_values = np.array(qq[0][1])
-        
-        # Добавляем линию y=x (теоретическое нормальное распределение)
-        min_val = min(min(x_values), min(y_values))
-        max_val = max(max(x_values), max(y_values))
-        line_x = np.array([min_val, max_val])
-        line_y = np.array([min_val, max_val])
-        
-        fig.add_trace(
-            go.Scatter(
-                x=line_x,
-                y=line_y,
-                mode='lines',
-                name='Теоретическая линия',
-                line=dict(color='red')
-            ),
-            row=2, col=1
-        )
-        
-        # Добавляем точки QQ-графика
-        fig.add_trace(
-            go.Scatter(
-                x=x_values,
-                y=y_values,
-                mode='markers',
-                name='QQ-график',
-                marker=dict(color='blue')
-            ),
-            row=2, col=1
-        )
-    except Exception as e:
-        warnings.warn(f"Ошибка при построении QQ-графика: {str(e)}")
-    
-    # 4. Остатки vs. Предсказанные значения
-    try:
-        fitted_values = model.fitted_model.fittedvalues.dropna()
-        common_index = residuals.index.intersection(fitted_values.index)
-        
-        if len(common_index) > 0:
-            res_common = residuals.loc[common_index]
-            fit_common = fitted_values.loc[common_index]
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=fit_common,
-                    y=res_common,
-                    mode='markers',
-                    name='Остатки vs. Предсказанные',
-                    marker=dict(color='blue')
-                ),
-                row=2, col=2
-            )
-            
-            # Добавляем горизонтальную линию y=0
-            fig.add_trace(
-                go.Scatter(
-                    x=[min(fit_common), max(fit_common)],
-                    y=[0, 0],
-                    mode='lines',
-                    line=dict(color='red', dash='dash'),
-                    name='y=0'
-                ),
-                row=2, col=2
-            )
-        else:
-            warnings.warn("Не удалось построить график остатков vs. предсказанные значения из-за несовпадения индексов.")
-    except Exception as e:
-        warnings.warn(f"Ошибка при построении графика остатков vs. предсказанные значения: {str(e)}")
-    
-    # Обновляем макет графика
-    fig.update_layout(
-        height=600,
-        showlegend=False,
-        title_text="Диагностика остатков модели"
-    )
-    
-    return fig
 
 
 def display_residuals_analysis(model: BaseTimeSeriesModel) -> None:
@@ -1134,140 +1266,11 @@ def compare_models(models: List[BaseTimeSeriesModel], test_data: pd.Series,
             # Коэффициент Тейла-2
             naive_forecast = pd.Series([train_data.iloc[-1]] * len(test_data), index=test_data.index)
             mse_naive = mean_squared_error(test_data, naive_forecast)
-            model_metrics['theil_u2'] = model_metrics.get('mse', mean_squared_error(test_data, forecast)) / mse_naive if mse_naive > 0 else np.nan
+            model_metrics['theil_u2'] = model_metrics.get('mse', mean_squared_error(test_data, forecast)) / mse_naive if mse_naive > 0 else float('inf')
         
-        # Информационные критерии
-        if hasattr(model.fitted_model, 'aic'):
-            model_metrics['aic'] = model.fitted_model.aic
-        
-        if hasattr(model.fitted_model, 'bic'):
-            model_metrics['bic'] = model.fitted_model.bic
-        
-        if hasattr(model.fitted_model, 'aicc'):
-            model_metrics['aicc'] = model.fitted_model.aicc
-            
         results.append(model_metrics)
     
-    # Создаем DataFrame из результатов
+    # Преобразуем в DataFrame
     results_df = pd.DataFrame(results)
     
-    # Сортируем по RMSE (если доступно)
-    if 'rmse' in results_df.columns:
-        results_df = results_df.sort_values('rmse')
-    
     return results_df
-
-
-def display_stationarity_results(results: Dict[str, Any]) -> None:
-    """
-    Отображает результаты проверки стационарности в интерфейсе Streamlit.
-    
-    Параметры:
-    -----------
-    results : Dict[str, Any]
-        Словарь с результатами тестов стационарности от функции check_stationarity
-    """
-    # Создаем две колонки для отображения результатов
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Тест Дики-Фуллера (ADF)")
-        st.write(f"Статистика: {results['adf_statistic']:.4f}")
-        st.write(f"p-значение: {results['adf_p_value']:.4f}")
-        
-        st.write("Критические значения:")
-        for key, value in results['adf_critical_values'].items():
-            st.write(f"- {key}: {value:.4f}")
-        
-        if results['adf_is_stationary']:
-            st.success("✅ ADF тест: ряд стационарный (p < 0.05)")
-        else:
-            st.warning("⚠️ ADF тест: ряд нестационарный (p ≥ 0.05)")
-    
-    with col2:
-        st.subheader("Тест KPSS")
-        
-        if results['kpss_statistic'] is not None:
-            st.write(f"Статистика: {results['kpss_statistic']:.4f}")
-            
-            # Исправленная версия без условного выражения внутри форматирования
-            if results['kpss_p_value'] is not None:
-                st.write(f"p-значение: {results['kpss_p_value']:.4f}")
-            else:
-                st.write("p-значение: N/A")
-            
-            st.write("Критические значения:")
-            for key, value in results['kpss_critical_values'].items():
-                st.write(f"- {key}: {value:.4f}")
-            
-            if results['kpss_is_stationary']:
-                st.success("✅ KPSS тест: ряд стационарный (p ≥ 0.05)")
-            else:
-                st.warning("⚠️ KPSS тест: ряд нестационарный (p < 0.05)")
-        else:
-            st.info("KPSS тест не выполнен")
-    
-    # Общий вывод
-    st.subheader("Вывод")
-    if results['is_stationary']:
-        st.success(f"✅ {results['conclusion']}")
-    else:
-        st.warning(f"⚠️ {results['conclusion']}")
-        st.info("Рекомендуется применить дифференцирование")
-
-
-def display_acf_pacf(time_series: pd.Series, lags: int = 40) -> None:
-    """
-    Отображает графики ACF и PACF в интерфейсе Streamlit.
-    
-    Параметры:
-    -----------
-    time_series : pd.Series
-        Временной ряд для анализа
-    lags : int, default=40
-        Количество лагов для отображения
-    """
-    # Получаем график ACF и PACF
-    fig = plot_acf_pacf_plotly(time_series, lags)
-    
-    # Отображаем график
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Добавляем пояснение для интерпретации
-    with st.expander("Как интерпретировать графики ACF и PACF?"):
-        st.markdown("""
-        ### Интерпретация ACF (Автокорреляционная функция)
-        - **ARMA/ARIMA параметр q (MA)**: Количество значимых лагов в ACF обычно указывает на порядок MA (q)
-        - Постепенное убывание ACF говорит о наличии AR-компоненты
-        - Резкое обнуление после q лагов указывает на MA(q) процесс
-        
-        ### Интерпретация PACF (Частичная автокорреляционная функция)
-        - **ARMA/ARIMA параметр p (AR)**: Количество значимых лагов в PACF обычно указывает на порядок AR (p)
-        - Постепенное убывание PACF говорит о наличии MA-компоненты
-        - Резкое обнуление после p лагов указывает на AR(p) процесс
-        
-        ### Для сезонных моделей (SARIMA)
-        - Обратите внимание на выбросы в ACF/PACF на лагах, соответствующих сезонному периоду (например, 12 для месячных данных)
-        - Эти выбросы помогают определить сезонные параметры P и Q
-        """)
-        
-    # Предлагаем рекомендации по параметрам
-    try:
-        # Получаем рекомендации
-        params = suggest_arima_params(time_series)
-        
-        st.info(f"""
-        **Рекомендации на основе анализа ACF и PACF:**
-        - Рекомендуемый параметр p (AR): {params['p']}
-        - Рекомендуемый параметр q (MA): {params['q']}
-        """)
-        
-        if 'P' in params and 'Q' in params and 's' in params:
-            st.info(f"""
-            **Рекомендации для сезонной части:**
-            - Рекомендуемый параметр P (Сезонный AR): {params['P']}
-            - Рекомендуемый параметр Q (Сезонный MA): {params['Q']}
-            - Рекомендуемый сезонный период s: {params['s']}
-            """)
-    except Exception as e:
-        st.warning(f"Не удалось сформировать рекомендации: {str(e)}") 

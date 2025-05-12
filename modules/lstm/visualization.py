@@ -17,6 +17,7 @@ import streamlit as st
 from typing import Dict, List, Tuple, Optional, Union, Any
 import seaborn as sns
 import warnings
+import matplotlib.dates as mdates
 
 
 def plot_time_series(time_series: pd.Series, title: str = "Временной ряд", 
@@ -356,4 +357,28 @@ def display_metrics(metrics: Dict[str, float]) -> None:
     }
     
     # Отображаем таблицу
-    st.table(pd.DataFrame(additional_metrics)) 
+    st.table(pd.DataFrame(additional_metrics))
+
+
+def plot_train_test_results_matplotlib(original_series: pd.Series, train_pred: pd.Series, test_pred: pd.Series, title: str = "Результаты LSTM модели") -> plt.Figure:
+    """
+    Строит график с результатами обучения и тестирования модели (matplotlib).
+    Легенда расположена внизу под графиком, шкала времени форматируется автоматически.
+    """
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.plot(original_series.index, original_series.values, label='Исходные данные', color='#1f77b4', linewidth=1.5)
+    ax.plot(train_pred.index, train_pred.values, label='Прогноз (обучение)', color='#ff7f0e', linestyle='dotted', linewidth=1.5)
+    ax.plot(test_pred.index, test_pred.values, label='Прогноз (тест)', color='#2ca02c', linestyle='dotted', linewidth=1.5)
+    ax.set_title(title)
+    ax.set_xlabel('Время')
+    ax.set_ylabel('Значение')
+    # Форматирование дат на оси X
+    if np.issubdtype(original_series.index.dtype, np.datetime64):
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(mdates.AutoDateLocator()))
+        fig.autofmt_xdate(rotation=30)
+    # Легенда внизу под графиком
+    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.5), ncol=3, frameon=True)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    return fig 

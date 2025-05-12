@@ -22,7 +22,7 @@ import os
 
 class BaseTimeSeriesModel(ABC):
     """
-    Базовый абстрактный класс для всех авторегрессионных моделей.
+    Базовый абстрактный класс для всех авторегрессионских моделей.
     Определяет общий интерфейс для работы с моделями временных рядов.
     """
     
@@ -167,6 +167,35 @@ class BaseTimeSeriesModel(ABC):
             raise FileNotFoundError(f"Файл модели {filepath} не найден")
         
         return joblib.load(filepath)
+    
+    def predict_in_sample(self) -> pd.Series:
+        """
+        Возвращает предсказанные значения для обучающей выборки.
+        
+        Возвращает:
+        -----------
+        pd.Series
+            Предсказанные значения на исторических данных, которые использовались при обучении
+        """
+        if not self.is_fitted:
+            raise ValueError("Модель не обучена. Сначала вызовите метод fit().")
+        
+        if hasattr(self.fitted_model, 'fittedvalues'):
+            # Для моделей из statsmodels (ARIMA, SARIMA и др.)
+            fitted_values = self.fitted_model.fittedvalues
+            
+            # Обработка возможных пропусков (NaN) в начале
+            if isinstance(fitted_values, pd.Series):
+                fitted_values = fitted_values.dropna()
+            
+            return fitted_values
+        else:
+            # Базовая реализация для других моделей
+            # Предсказываем значения на тех же данных, что и обучались
+            if not hasattr(self, 'train_data'):
+                raise ValueError("Отсутствуют данные обучения. Нельзя предсказать значения.")
+                
+            return self.predict(steps=0)  # Просим предсказание без прогноза вперед
 
 
 class ARMAModel(BaseTimeSeriesModel):
@@ -474,13 +503,13 @@ class SARIMAModel(BaseTimeSeriesModel):
                         self.fitted_model = model.fit(disp=False)
                 else:
                     self.fitted_model = model.fit(disp=False)
-                    
+                
                 self.is_fitted = True
                 self.train_data = series
             except Exception as e:
                 warnings.warn(f"Ошибка при обучении SARIMA модели: {str(e)}")
                 raise e
-        
+                return None
         return self
     
     def predict(self, steps: int = 1) -> pd.Series:
@@ -518,4 +547,4 @@ class SARIMAModel(BaseTimeSeriesModel):
             'p': self.p, 'd': self.d, 'q': self.q,
             'P': self.P, 'D': self.D, 'Q': self.Q, 'm': self.m,
             'type': 'SARIMA'
-        } 
+        }

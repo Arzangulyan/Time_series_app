@@ -11,6 +11,12 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 import warnings
+import plotly.graph_objects as go
+import time
+import logging
+
+# Устанавливаем конфигурацию страницы в самом начале (до любых других вызовов st)
+st.set_page_config(page_title="Авторегрессионные модели", page_icon="📈", layout="wide")
 
 # Добавляем корневую директорию проекта в путь Python
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -25,100 +31,39 @@ from modules.autoregressive.models import (
 )
 from modules.autoregressive.visualization import (
     plot_time_series, plot_train_test_split, plot_acf_pacf_plotly,
-    plot_forecast, plot_forecast_plotly, display_model_information, display_differencing_effect,
-    analyze_residuals, plot_residuals_diagnostic, compare_models,
-    display_stationarity_results, display_acf_pacf, auto_detect_seasonality, display_residuals_analysis
+    plot_forecast, plot_forecast_plotly, plot_forecast_matplotlib, 
+    display_model_information, display_differencing_effect,
+    auto_detect_seasonality
 )
 # Импортируем функции выбора и оценки моделей
 from modules.autoregressive.model_selection import (
     check_stationarity as check_stationarity_advanced,
     estimate_differencing_order, detect_seasonality,
-    auto_arima, evaluate_model_performance,
+    auto_arima, evaluate_model_performance, split_train_test,  # Добавляем импорт split_train_test
     plot_model_results, generate_model_report
 )
 
 # Импортируем вспомогательные модули из проекта
 from modules.page_template import (
-    setup_page,
     load_time_series,
     run_calculations_on_button_click,
 )
+import modules.reporting as reporting
+from modules.utils import nothing_selected
 
-# Метаданные моделей для отображения
-MODEL_METADATA = {
-    "ARMA": {
-        "name": "ARMA",
-        "full_name": "Auto-Regressive Moving Average",
-        "description": """
-        **ARMA (Auto-Regressive Moving Average)** - модель для стационарных временных рядов,
-        объединяющая авторегрессионный компонент (AR) и компонент скользящего среднего (MA).
-        
-        Математическая запись: ARMA(p, q)
-        
-        $$y_t = c + \\sum_{i=1}^{p} \\phi_i y_{t-i} + \\sum_{j=1}^{q} \\theta_j \\varepsilon_{t-j} + \\varepsilon_t$$
-        
-        где:
-        - $y_t$ - значение временного ряда в момент времени $t$
-        - $c$ - константа
-        - $\\phi_i$ - параметры авторегрессии
-        - $\\theta_j$ - параметры скользящего среднего
-        - $\\varepsilon_t$ - белый шум
-        
-        **Когда использовать:** для стационарных временных рядов без выраженного тренда и сезонности.
-        """
-    },
-    "ARIMA": {
-        "name": "ARIMA",
-        "full_name": "Auto-Regressive Integrated Moving Average",
-        "description": """
-        **ARIMA (Auto-Regressive Integrated Moving Average)** - расширение модели ARMA для нестационарных временных рядов
-        с добавлением компонента интегрирования (дифференцирования).
-        
-        Математическая запись: ARIMA(p, d, q)
-        
-        $$\\nabla^d y_t = c + \\sum_{i=1}^{p} \\phi_i \\nabla^d y_{t-i} + \\sum_{j=1}^{q} \\theta_j \\varepsilon_{t-j} + \\varepsilon_t$$
-        
-        где:
-        - $\\nabla^d$ - оператор дифференцирования порядка $d$
-        - $y_t$ - значение временного ряда в момент времени $t$
-        - $c$ - константа
-        - $\\phi_i$ - параметры авторегрессии
-        - $\\theta_j$ - параметры скользящего среднего
-        - $\\varepsilon_t$ - белый шум
-        
-        **Когда использовать:** для временных рядов с трендом, но без выраженной сезонности.
-        """
-    },
-    "SARIMA": {
-        "name": "SARIMA",
-        "full_name": "Seasonal Auto-Regressive Integrated Moving Average",
-        "description": """
-        **SARIMA (Seasonal Auto-Regressive Integrated Moving Average)** - расширение модели ARIMA
-        для учета сезонности во временных рядах.
-        
-        Математическая запись: SARIMA(p, d, q)(P, D, Q, s)
-        
-        $$\\Phi_P(B^s)\\phi_p(B)(1-B)^d(1-B^s)^D y_t = c + \\Theta_Q(B^s)\\theta_q(B)\\varepsilon_t$$
-        
-        где:
-        - $B$ - оператор сдвига назад: $By_t = y_{t-1}$
-        - $\\phi_p(B)$ - несезонный AR полином порядка $p$
-        - $\\Phi_P(B^s)$ - сезонный AR полином порядка $P$
-        - $(1-B)^d$ - несезонное дифференцирование порядка $d$
-        - $(1-B^s)^D$ - сезонное дифференцирование порядка $D$
-        - $\\theta_q(B)$ - несезонный MA полином порядка $q$
-        - $\\Theta_Q(B^s)$ - сезонный MA полином порядка $Q$
-        - $s$ - сезонный период
-        - $\\varepsilon_t$ - белый шум
-        
-        **Когда использовать:** для временных рядов с трендом и сезонностью.
-        """
-    }
-}
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout  # Log to stdout so it appears in terminal
+)
+logger = logging.getLogger('arima_app')
 
-st.set_page_config(page_title="Авторегрессионные модели", page_icon="📈", layout="wide")
-
-# Инициализация состояния сессии
+# Инициализация состояния сессии - добавим инициализацию ar_model и ar_results
+if 'ar_model' not in st.session_state:
+    st.session_state.ar_model = None
+if 'ar_results' not in st.session_state:
+    st.session_state.ar_results = None
 if 'run_future_forecast' not in st.session_state:
     st.session_state.run_future_forecast = False
 if 'future_steps' not in st.session_state:
@@ -129,6 +74,8 @@ if 'current_active_model' not in st.session_state:
     st.session_state.current_active_model = None
 if 'last_trained_on' not in st.session_state:
     st.session_state.last_trained_on = None
+if 'auto_tuning_experiments' not in st.session_state:
+    st.session_state.auto_tuning_experiments = []
 
 def initialize_session_state():
     """Инициализирует переменные состояния сессии."""
@@ -354,22 +301,26 @@ def display_model_metrics(results_dict, model_type_key):
     # Определяем метрики для отображения
     metrics_to_display = {
         'R²': results_dict.get('r2', 'Н/Д'),
+        'Adjusted R²': results_dict.get('adj_r2', 'Н/Д'),
         'MSE': results_dict.get('mse', 'Н/Д'),
         'RMSE': results_dict.get('rmse', 'Н/Д'),
         'MAE': results_dict.get('mae', 'Н/Д'),
-        'MAPE': format_mape(results_dict.get('mape', np.nan))
+        'MAPE': format_mape(results_dict.get('mape', np.nan)),
+        'MASE': results_dict.get('mase', 'Н/Д')
     }
     
-    # Создаем метрики в две колонки
+    # Создаем метрики в три колонки
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("R²", f"{metrics_to_display['R²']:.4f}" if isinstance(metrics_to_display['R²'], (int, float)) else metrics_to_display['R²'])
+        st.metric("Adjusted R²", f"{metrics_to_display['Adjusted R²']:.4f}" if isinstance(metrics_to_display['Adjusted R²'], (int, float)) else metrics_to_display['Adjusted R²'])
         st.metric("MSE", f"{metrics_to_display['MSE']:.4f}" if isinstance(metrics_to_display['MSE'], (int, float)) else metrics_to_display['MSE'])
     with col2:
         st.metric("RMSE", f"{metrics_to_display['RMSE']:.4f}" if isinstance(metrics_to_display['RMSE'], (int, float)) else metrics_to_display['RMSE'])
         st.metric("MAE", f"{metrics_to_display['MAE']:.4f}" if isinstance(metrics_to_display['MAE'], (int, float)) else metrics_to_display['MAE'])
     with col3:
         st.metric("MAPE", metrics_to_display['MAPE'])
+        st.metric("MASE", f"{metrics_to_display['MASE']:.4f}" if isinstance(metrics_to_display['MASE'], (int, float)) else metrics_to_display['MASE'])
 
 
 def train_model_and_predict(data, test_data, model_type=None, parameters=None, model_title=None):
@@ -474,670 +425,706 @@ def make_future_forecast(model, data, steps, title=None):
 
 
 def main():
-    # Инициализация страницы (без вызова set_page_config, так как он уже вызван ранее)
-    # setup_page("Прогнозирование временных рядов с авторегрессионными моделями", "Настройки AR-моделей")
-    st.title("Прогнозирование временных рядов с авторегрессионными моделями")
-    st.sidebar.header("Настройки AR-моделей")
+    # Заголовок
+    st.title("Авторегрессионные модели (ARIMA/SARIMA)")
     
-    # Инициализация session_state
-    initialize_session_state()
-    
-    # Боковая панель: выбор модели
-    st.sidebar.subheader("Выбор модели")
-    model_type = st.sidebar.radio(
-        "Тип модели:",
-        ["ARMA", "ARIMA", "SARIMA"],
-        index=["ARMA", "ARIMA", "SARIMA"].index(st.session_state.selected_model_type)
-    )
-    
-    # Обновляем тип модели в session_state
-    st.session_state.selected_model_type = model_type
-    
-    # Отображаем информацию о выбранной модели
-    st.markdown(f"# {MODEL_METADATA[model_type]['full_name']} ({MODEL_METADATA[model_type]['name']})")
-    
-    with st.expander("Описание модели"):
-        st.markdown(MODEL_METADATA[model_type]['description'])
-    
-    # Загрузка временного ряда
+    # Загрузка данных
     time_series = load_time_series()
-    
-    if time_series is None:
-        st.warning("Пожалуйста, загрузите временной ряд")
+    if time_series is None or time_series.empty:
+        st.error("Не удалось загрузить временной ряд. Пожалуйста, убедитесь, что данные загружены корректно.")
         return
     
-    # Получаем первый столбец, если данные представлены в формате DataFrame
-    if isinstance(time_series, pd.DataFrame) and time_series.shape[1] > 0:
-        data = time_series.iloc[:, 0]
-    else:
-        data = time_series
-    
-    # Сохраняем данные в session_state
-    st.session_state.time_series = data
-    
-    # Отображаем исходный временной ряд
+    # Отображаем исходный ряд
     st.subheader("Исходный временной ряд")
-    fig = plot_time_series(data, title="Исходный временной ряд")
-    st.pyplot(fig)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=time_series.index,
+        y=time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series,
+        mode="lines",
+        name="Временной ряд"
+    ))
+    fig.update_layout(
+        xaxis_title="Время",
+        yaxis_title="Значение",
+        height=400
+    )
+    st.plotly_chart(fig, use_container_width=True)
     
-    # Информация о данных
-    freq = detect_frequency(data)
-    st.info(f"""
-    **Информация о временном ряде:**
-    - Количество наблюдений: {len(data)}
-    - Период: с {data.index[0].strftime('%d.%m.%Y')} по {data.index[-1].strftime('%d.%m.%Y')}
-    - Определенная частота: {freq or "Не определена"}
-    """)
+    # Боковая панель с параметрами
+    st.sidebar.subheader("Настройки модели")
     
-    # Разделение на обучающую и тестовую выборки
-    st.sidebar.subheader("Разделение данных")
-    train_size = st.sidebar.slider("Доля обучающей выборки", 0.5, 0.95, 0.8, 0.05)
+    # Вкладки для различных режимов
+    tabs = st.sidebar.tabs(["Автоматический подбор", "Ручная настройка"])
     
-    # Разделяем данные
-    n = len(data)
-    train_idx = int(n * train_size)
-    train_data = data.iloc[:train_idx]
-    test_data = data.iloc[train_idx:]
+    with tabs[0]:
+        st.header("Автоматический подбор параметров")
+        
+        train_size = st.slider(
+            "Размер обучающей выборки", 
+            min_value=0.5, 
+            max_value=0.95, 
+            value=0.8, 
+            step=0.05,
+            help="Доля данных для обучения (остальное - для тестирования)"
+        )
+        
+        seasonal = st.checkbox("Учитывать сезонность", value=True)
+        
+        # Настройки для автоматического подбора
+        with st.expander("Расширенные настройки", expanded=False):
+            info_criterion = st.selectbox(
+                "Информационный критерий", 
+                options=["aic", "bic", "aicc", "oob"],
+                index=0,
+                help="Критерий для выбора оптимальной модели"
+            )
+            
+            max_p = st.slider("Максимальный порядок AR (p)", 0, 5, 2)
+            max_d = st.slider("Максимальный порядок дифференцирования (d)", 0, 2, 1)
+            max_q = st.slider("Максимальный порядок MA (q)", 0, 5, 2)
+            
+            if seasonal:
+                max_P = st.slider("Максимальный сезонный порядок AR (P)", 0, 2, 1, key="auto_max_P")
+                max_D = st.slider("Максимальный сезонный порядок дифференцирования (D)", 0, 1, 1, key="auto_max_D")
+                max_Q = st.slider("Максимальный сезонный порядок MA (Q)", 0, 2, 1, key="auto_max_Q")
+                m = st.slider("Сезонный период (m)", 2, 365, 12, key="auto_seasonal_period")
+        
+        forecast_steps = st.slider(
+            "Шаги прогноза вперед", 
+            min_value=0, 
+            max_value=100, 
+            value=10, 
+            step=5,
+            help="Количество периодов для прогноза в будущее"
+        )
+        
+        auto_button = st.button("Запустить автоматический подбор")
+        
+        if auto_button:
+            with st.spinner("Выполняется автоматический подбор параметров..."):
+                try:
+                    # Очистка предыдущих экспериментов
+                    logger.info("Clearing previous experiments")
+                    st.session_state.auto_tuning_experiments = []
+                    
+                    # Отслеживаем время выполнения
+                    start_time = time.perf_counter()
+                    
+                    # Подготовка данных
+                    ts_series = time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series
+                    train, test = split_train_test(ts_series, train_size)
+                    
+                    # Параметры для auto_arima
+                    auto_params = {
+                        'seasonal': seasonal,
+                        'information_criterion': info_criterion,
+                        'max_p': max_p,
+                        'max_d': max_d,
+                        'max_q': max_q,
+                        'return_all_models': True,  # Получить все протестированные модели
+                        'verbose': True,  # Включить подробный вывод для отслеживания экспериментов
+                    }
+                    
+                    if seasonal:
+                        auto_params.update({
+                            'max_P': max_P,
+                            'max_D': max_D,
+                            'max_Q': max_Q,
+                            'm': m
+                        })
+                    
+                    # Запускаем автоматический подбор
+                    logger.info(f"Starting auto_arima with params: {auto_params}")
+                    auto_results = auto_arima(train, **auto_params)
+                    logger.info(f"auto_arima completed, keys in result: {list(auto_results.keys())}")
+                    
+                    # Теперь auto_results - это словарь с 'best_model' и, возможно, другими моделями
+                    model = auto_results['best_model']
+                    
+                    # Сохраняем все протестированные модели в состоянии сессии, если они доступны
+                    if 'all_models' in auto_results:
+                        logger.info(f"Found {len(auto_results['all_models'])} models in auto_results['all_models']")
+                        
+                        # Добавляем информацию о критерии
+                        criterion_used = auto_results.get('criterion_used', info_criterion).upper()
+                        st.info(f"Модели ранжированы по критерию {criterion_used}. Меньшее значение = лучшая модель.")
+                        
+                        for i, model_info in enumerate(auto_results['all_models']):
+                            experiment_model = model_info['model']
+                            experiment_params = experiment_model.get_params()
+                            
+                            # Вычисляем метрики для этого эксперимента
+                            try:
+                                train_pred = experiment_model.predict_in_sample()
+                                test_pred = experiment_model.predict(steps=len(test))
+                                train_metrics = evaluate_model_performance(experiment_model, train, train)
+                                test_metrics = evaluate_model_performance(experiment_model, train, test)
+                                
+                                # Создаем запись эксперимента
+                                experiment = {
+                                    'model': experiment_model,
+                                    'model_info': display_model_information(experiment_model),
+                                    'params': experiment_params,
+                                    'train_metrics': train_metrics,
+                                    'test_metrics': test_metrics,
+                                    'info_criterion': model_info.get('criterion_value', None),
+                                    'train_time': model_info.get('fit_time', 0),
+                                    'rank': i + 1  # Rank is based on the sorted order from auto_arima
+                                }
+                                st.session_state.auto_tuning_experiments.append(experiment)
+                                logger.info(f"Added experiment {i+1}: {experiment['model_info']} with {criterion_used}: {experiment['info_criterion']}")
+                            except Exception as exp_e:
+                                logger.error(f"Error collecting metrics for model: {str(exp_e)}")
+                                st.warning(f"Не удалось собрать метрики для модели {experiment_model.__class__.__name__}: {str(exp_e)}")
+                    else:
+                        logger.warning("No 'all_models' key found in auto_results")
+                    
+                    # Рассчитываем время выполнения
+                    train_time = time.perf_counter() - start_time
+                    
+                    # Вычисляем метрики
+                    train_pred = model.predict_in_sample()
+                    test_pred = model.predict(steps=len(test))
+                    
+                    train_metrics = evaluate_model_performance(model, train, train)
+                    test_metrics = evaluate_model_performance(model, train, test)
+                    
+                    # Сохраняем результаты в состоянии сессии
+                    st.session_state.ar_model = model
+                    st.session_state.ar_results = {
+                        'train': train,
+                        'test': test,
+                        'train_predictions': train_pred,
+                        'test_predictions': test_pred,
+                        'train_metrics': train_metrics,
+                        'test_metrics': test_metrics,
+                        'original_series': ts_series,
+                        'train_time': train_time,
+                        'model_info': display_model_information(model),
+                        'params': model.get_params()
+                    }
+                    
+                    st.success(f"Автоматический подбор завершен! Выбрана модель: {display_model_information(model)}")
+                    logger.info(f"Auto-tuning completed with {len(st.session_state.auto_tuning_experiments)} experiments")
+                    
+                except Exception as e:
+                    logger.error(f"Error in auto-tuning: {str(e)}", exc_info=True)
+                    st.error(f"Ошибка при автоматическом подборе: {str(e)}")
     
-    # Сохраняем разделение в session_state
-    st.session_state.train_data = train_data
-    st.session_state.test_data = test_data
+    # Display auto-tuning experiments if available
+    logger.info(f"Checking auto_tuning_experiments: exists={bool(st.session_state.auto_tuning_experiments)}, length={len(st.session_state.auto_tuning_experiments) if st.session_state.auto_tuning_experiments else 0}")
+    if st.session_state.auto_tuning_experiments and len(st.session_state.auto_tuning_experiments) > 0:
+        logger.info("Displaying auto-tuning experiments section")
+        st.subheader("🔍 Результаты автоматического подбора параметров")
+        
+        # Display information about ranking criteria
+        criterion_info = info_criterion.upper() if 'info_criterion' not in st.session_state else st.session_state.info_criterion.upper()
+        st.info(f"Выбор модели основан на критерии {criterion_info}. Меньшее значение = лучшая модель.")
+        st.info(f"Всего протестировано моделей: {len(st.session_state.auto_tuning_experiments)}")
+        
+        # Create a DataFrame for comparison
+        models_data = []
+        for exp in st.session_state.auto_tuning_experiments:
+            model_data = {
+                'Модель': exp['model_info'],
+                'Ранг': exp['rank'],
+                f'{criterion_info}': exp.get('info_criterion', 'Н/Д'),
+                'RMSE (тест)': exp['test_metrics'].get('rmse', 'Н/Д'),
+                'MAE (тест)': exp['test_metrics'].get('mae', 'Н/Д'),
+                'MAPE (тест)': exp['test_metrics'].get('mape', 'Н/Д'),
+                'Theil U2 (тест)': exp['test_metrics'].get('theil_u2', 'Н/Д'),
+                'Время (сек)': exp.get('train_time', 'Н/Д')
+            }
+            models_data.append(model_data)
+            logger.info(f"Added model to comparison table: {model_data['Модель']} with {criterion_info}: {model_data[f'{criterion_info}']}")
+        
+        # Sort by criterion value (not by rank which might be wrong)
+        models_df = pd.DataFrame(models_data)
+        models_df[f'{criterion_info}'] = pd.to_numeric(models_df[f'{criterion_info}'], errors='coerce')
+        models_df = models_df.sort_values(f'{criterion_info}')
+        
+        # Re-assign ranks based on sorted criterion values
+        models_df['Ранг'] = range(1, len(models_df) + 1)
+        
+        logger.info(f"Created comparison DataFrame with {len(models_df)} rows, sorted by {criterion_info}")
+        
+        # Display the comparison table
+        st.dataframe(models_df, use_container_width=True)
+        logger.info("Displayed comparison table")
+        
+        # Detailed view of experiments with tabs - but use the sorted order
+        if len(models_df) > 0:
+            st.subheader("Подробная информация о лучших моделях")
+            
+            # Get the top 5 models based on the sorted DataFrame
+            top_model_indices = models_df.index[:5].tolist()
+            top_experiments = [st.session_state.auto_tuning_experiments[i] for i in top_model_indices]
+            
+            # Update experiment ranks to match the sorted order
+            for i, idx in enumerate(top_model_indices):
+                st.session_state.auto_tuning_experiments[idx]['rank'] = i + 1
+            
+            # Create tabs for each experiment
+            experiment_tabs = st.tabs([f"Модель {i+1}: {exp['model_info']}" 
+                                     for i, exp in enumerate(top_experiments)])
+            
+            # Fill each tab with details
+            for i, tab in enumerate(experiment_tabs):
+                if i < len(top_experiments):
+                    exp = top_experiments[i]
+                    with tab:
+                        st.markdown(f"### {exp['model_info']}")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("**Обучающая выборка:**")
+                            metrics_train = exp['train_metrics']
+                            st.metric("RMSE", f"{metrics_train.get('rmse', 'Н/Д'):.4f}")
+                            st.metric("MAE", f"{metrics_train.get('mae', 'Н/Д'):.4f}")
+                            st.metric("MAPE", f"{metrics_train.get('mape', 'Н/Д'):.4f}" if 'mape' in metrics_train else "Н/Д")
+                            st.metric("SMAPE", f"{metrics_train.get('smape', 'Н/Д'):.4f}" if 'smape' in metrics_train else "Н/Д")
+                            st.metric("MASE", f"{metrics_train.get('mase', 'Н/Д'):.4f}" if 'mase' in metrics_train else "Н/Д")
+                            st.metric("R²", f"{metrics_train.get('r2', np.nan):.4f}")
+                            st.metric("Adjusted R²", f"{metrics_train.get('adj_r2', np.nan):.4f}")
+                            
+                        with col2:
+                            st.markdown("**Тестовая выборка:**")
+                            metrics_test = exp['test_metrics']
+                            st.metric("RMSE", f"{metrics_test.get('rmse', 'Н/Д'):.4f}")
+                            st.metric("MAE", f"{metrics_test.get('mae', 'Н/Д'):.4f}")
+                            st.metric("MAPE", f"{metrics_test.get('mape', 'Н/Д'):.4f}" if 'mape' in metrics_test else "Н/Д")
+                            st.metric("SMAPE", f"{metrics_test.get('smape', 'Н/Д'):.4f}" if 'smape' in metrics_test else "Н/Д")
+                            st.metric("MASE", f"{metrics_test.get('mase', 'Н/Д'):.4f}" if 'mase' in metrics_test else "Н/Д")
+                            st.metric("R²", f"{metrics_test.get('r2', np.nan):.4f}")
+                            st.metric("Adjusted R²", f"{metrics_test.get('adj_r2', np.nan):.4f}")
+                        
+                        # Generate forecast figure for this experiment model
+                        try:
+                            if "original_series" in st.session_state.ar_results and "train" in st.session_state.ar_results and "test" in st.session_state.ar_results:
+                                # Create forecast figure for this experiment model
+                                forecast_fig = plot_forecast_plotly(
+                                    model=exp['model'],
+                                    steps=len(st.session_state.ar_results['test']),
+                                    original_data=st.session_state.ar_results['original_series'],
+                                    train_data=st.session_state.ar_results['train'],
+                                    test_data=st.session_state.ar_results['test'],
+                                    title=f"Прогноз модели {exp['model_info']}"
+                                )
+                                st.plotly_chart(forecast_fig, use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"Не удалось отобразить прогноз для модели: {str(e)}")
+                        
+                        # Add download report button for this model
+                        try:
+                            # Create forecast figure for this experiment model
+                            forecast_fig = plot_forecast_matplotlib(
+                                model=exp['model'],
+                                steps=len(st.session_state.ar_results['test']),
+                                original_data=st.session_state.ar_results['original_series'],
+                                train_data=st.session_state.ar_results['train'],
+                                test_data=st.session_state.ar_results['test'],
+                                title=f"Прогноз модели {exp['model_info']}"
+                            )
+                            forecast_img_base64 = reporting.save_plot_to_base64(forecast_fig, backend='matplotlib')
+                            
+                            # Create empty loss figure
+                            loss_fig, ax = plt.subplots(figsize=(8, 4))
+                            ax.text(0.5, 0.5, "Для авторегрессионных моделей график потерь не применим", 
+                                ha='center', va='center', fontsize=12)
+                            ax.set_axis_off()
+                            loss_img_base64 = reporting.save_plot_to_base64(loss_fig, backend='matplotlib')
+                            
+                            # Generate report
+                            md_report = reporting.generate_markdown_report(
+                                title=f"Отчет по эксперименту {exp['model_info']}",
+                                description=f"Авторегрессионная модель {exp['model_info']} из автоматического подбора параметров.",
+                                metrics_train=exp['train_metrics'],
+                                metrics_test=exp['test_metrics'],
+                                train_time=exp.get('train_time', 0),
+                                forecast_img_base64=forecast_img_base64,
+                                loss_img_base64=loss_img_base64,
+                                params=exp['params'],
+                                early_stopping=False,
+                                early_stopping_epoch=None
+                            )
+                            
+                            # Generate PDF
+                            pdf_bytes = None
+                            try:
+                                pdf_bytes = reporting.markdown_to_pdf(md_report)
+                            except Exception as e:
+                                st.warning(f"Не удалось сгенерировать PDF: {e}")
+                            
+                            # Add download buttons
+                            st.markdown("### Скачать отчет по этой модели")
+                            reporting.download_report_buttons(
+                                md_report, 
+                                pdf_bytes, 
+                                md_filename=f"arima_model_{i+1}_report.md", 
+                                pdf_filename=f"arima_model_{i+1}_report.pdf"
+                            )
+                        except Exception as e:
+                            st.error(f"Не удалось создать отчет по эксперименту: {str(e)}")
+            
+            # Add consolidated report option
+            st.subheader("Сводный отчет по автоматическому подбору")
+            if st.button("Сгенерировать сводный отчет"):
+                try:
+                    # Create a consolidated report with all experiments
+                    consolidated_md = "# Сводный отчет по автоматическому подбору параметров\n\n"
+                    consolidated_md += f"Дата и время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                    consolidated_md += "## Сравнение моделей\n\n"
+                    
+                    # Add comparison table
+                    table_md = "| Ранг | Модель | RMSE (тест) | MAE (тест) | MAPE (тест) | Theil's U2 |\n"
+                    table_md += "|------|--------|------------|------------|-------------|------------|\n"
+                    
+                    for exp in st.session_state.auto_tuning_experiments:
+                        metrics = exp['test_metrics']
+                        table_md += f"| {exp['rank']} | {exp['model_info']} | {metrics.get('rmse', 'Н/Д'):.4f} | "
+                        table_md += f"{metrics.get('mae', 'Н/Д'):.4f} | {metrics.get('mape', 'Н/Д'):.4f} | "
+                        table_md += f"{metrics.get('theil_u2', 'Н/Д'):.4f} |\n"
+                    
+                    consolidated_md += table_md + "\n\n"
+                    
+                    # Add details for each model
+                    for i, exp in enumerate(sorted(st.session_state.auto_tuning_experiments, key=lambda x: x['rank'])[:5]):  # Limit to top 5
+                        consolidated_md += f"## Модель {i+1}: {exp['model_info']}\n\n"
+                        
+                        # Format parameters
+                        params_text = "\n".join([f"- **{k}**: {v}" for k, v in exp['params'].items()])
+                        consolidated_md += f"### Параметры\n{params_text}\n\n"
+                        
+                        # Format metrics
+                        consolidated_md += "### Метрики\n\n"
+                        consolidated_md += "**Обучающая выборка:**\n"
+                        train_metrics = exp['train_metrics']
+                        consolidated_md += f"- RMSE: {train_metrics.get('rmse', 'Н/Д'):.4f}\n"
+                        consolidated_md += f"- MAE: {train_metrics.get('mae', 'Н/Д'):.4f}\n"
+                        consolidated_md += f"- MAPE: {train_metrics.get('mape', 'Н/Д'):.4f}\n\n"
+                        
+                        consolidated_md += "**Тестовая выборка:**\n"
+                        test_metrics = exp['test_metrics']
+                        consolidated_md += f"- RMSE: {test_metrics.get('rmse', 'Н/Д'):.4f}\n"
+                        consolidated_md += f"- MAE: {test_metrics.get('mae', 'Н/Д'):.4f}\n"
+                        consolidated_md += f"- MAPE: {test_metrics.get('mape', 'Н/Д'):.4f}\n\n"
+                        
+                        # Add separator
+                        consolidated_md += "---\n\n"
+                    
+                    # Generate and offer consolidated report
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    st.download_button(
+                        label="Скачать сводный отчет (.md)",
+                        data=consolidated_md,
+                        file_name=f"arima_autotuning_report_{timestamp}.md",
+                        mime="text/markdown"
+                    )
+                    
+                    # Try to generate PDF
+                    try:
+                        pdf_bytes = reporting.markdown_to_pdf(consolidated_md)
+                        st.download_button(
+                            label="Скачать сводный отчет (.pdf)",
+                            data=pdf_bytes,
+                            file_name=f"arima_autotuning_report_{timestamp}.pdf",
+                            mime="application/pdf"
+                        )
+                    except Exception as e:
+                        st.warning(f"Не удалось сгенерировать PDF для сводного отчета: {e}")
+                        
+                except Exception as e:
+                    st.error(f"Ошибка при создании сводного отчета: {str(e)}")
+
+    with tabs[1]:
+        st.header("Ручная настройка параметров")
+        
+        train_size = st.slider(
+            "Размер обучающей выборки", 
+            min_value=0.5, 
+            max_value=0.95, 
+            value=0.8, 
+            step=0.05,
+            key="manual_train_size",
+            help="Доля данных для обучения (остальное - для тестирования)"
+        )
+        
+        model_type = st.radio("Тип модели", ["ARIMA", "SARIMA"])
+        
+        # Параметры ARIMA
+        p = st.slider("Порядок AR (p)", 0, 5, 1, key="manual_p")
+        d = st.slider("Порядок дифференцирования (d)", 0, 2, 1, key="manual_d")
+        q = st.slider("Порядок MA (q)", 0, 5, 1, key="manual_q")
+        
+        # Дополнительные параметры для SARIMA
+        if model_type == "SARIMA":
+            P = st.slider("Сезонный порядок AR (P)", 0, 2, 1, key="manual_P")
+            D = st.slider("Сезонный порядок дифференцирования (D)", 0, 1, 1, key="manual_D")
+            Q = st.slider("Сезонный порядок MA (Q)", 0, 2, 1, key="manual_Q")
+            m = st.slider("Сезонный период (m)", 2, 365, 12, key="manual_seasonal_period")
+        
+        forecast_steps = st.slider(
+            "Шаги прогноза вперед", 
+            min_value=0, 
+            max_value=100, 
+            value=10, 
+            step=5,
+            key="manual_forecast_steps",
+            help="Количество периодов для прогноза в будущее"
+        )
+        
+        manual_button = st.button("Запустить обучение модели")
+        
+        if manual_button:
+            with st.spinner("Выполняется обучение модели..."):
+                try:
+                    # Отслеживаем время выполнения
+                    start_time = time.perf_counter()
+                    
+                    # Подготовка данных
+                    ts_series = time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series
+                    train, test = split_train_test(ts_series, train_size)
+                    
+                    # Создаем модель
+                    if model_type == "ARIMA":
+                        model = ARIMAModel(p=p, d=d, q=q)
+                    else:  # SARIMA
+                        model = SARIMAModel(p=p, d=d, q=q, P=P, D=D, Q=Q, m=m)
+                    
+                    # Обучаем модель
+                    model.fit(train)
+                    
+                    # Рассчитываем время выполнения
+                    train_time = time.perf_counter() - start_time
+                    
+                    # Вычисляем метрики
+                    train_pred = model.predict_in_sample()
+                    test_pred = model.predict(steps=len(test))
+                    
+                    train_metrics = evaluate_model_performance(model, train, train)
+                    test_metrics = evaluate_model_performance(model, train, test)
+                    
+                    # Сохраняем результаты в состоянии сессии
+                    st.session_state.ar_model = model
+                    st.session_state.ar_results = {
+                        'train': train,
+                        'test': test,
+                        'train_predictions': train_pred,
+                        'test_predictions': test_pred,
+                        'train_metrics': train_metrics,
+                        'test_metrics': test_metrics,
+                        'original_series': ts_series,
+                        'train_time': train_time,
+                        'model_info': display_model_information(model),
+                        'params': model.get_params()
+                    }
+                    
+                    st.success(f"Модель успешно обучена: {display_model_information(model)}")
+                    
+                except Exception as e:
+                    st.error(f"Ошибка при обучении модели: {str(e)}")
     
-    # Отображаем разделение
-    st.subheader("Разделение на обучающую и тестовую выборки")
-    split_fig = plot_train_test_split(train_data, test_data)
-    st.pyplot(split_fig)
-    
-    # Секция анализа стационарности
-    st.subheader("Анализ стационарности")
-    stationarity_results = check_stationarity(train_data)
-    display_stationarity_results(stationarity_results)
-    
-    # Дифференцирование для нестационарных рядов
-    st.subheader("Дифференцирование")
-    
-    # Параметры дифференцирования в зависимости от типа модели
-    if model_type == "ARMA":
-        st.info("Модель ARMA предназначена для стационарных временных рядов и не использует дифференцирование.")
-        differenced_data = train_data
-    else:
+    # Отображение результатов, если они есть
+    if st.session_state.ar_results is not None:
+        results = st.session_state.ar_results
+        
+        # Отображение метрик
+        st.subheader("Метрики качества прогноза")
+        
+        # Вывод времени обучения
+        st.caption(f"Время обучения модели: {results['train_time']:.2f} сек.")
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            d = st.number_input("Порядок дифференцирования (d)", 
-                               min_value=0, max_value=2, 
-                               value=1 if not stationarity_results['is_stationary'] else 0,
-                               step=1)
+            st.markdown("**Обучающая выборка:**")
+            metrics_train = results['train_metrics']
+            st.metric("RMSE", f"{metrics_train['rmse']:.4f}")
+            st.metric("MAE", f"{metrics_train['mae']:.4f}")
+            st.metric("MAPE", f"{metrics_train.get('mape', np.nan):.4f}")
+            st.metric("SMAPE", f"{metrics_train.get('smape', np.nan):.4f}")
+            st.metric("MASE", f"{metrics_train.get('mase', np.nan):.4f}")
+            st.metric("R²", f"{metrics_train.get('r2', np.nan):.4f}")
+            st.metric("Adjusted R²", f"{metrics_train.get('adj_r2', np.nan):.4f}")
+            
+            with st.expander("Что означают эти метрики?"):
+                st.markdown("""
+                - **RMSE** (Root Mean Squared Error) - среднеквадратичная ошибка. Показывает среднюю величину ошибки прогноза в тех же единицах измерения, что и данные.
+                - **MAE** (Mean Absolute Error) - средняя абсолютная ошибка. Более устойчива к выбросам, чем RMSE.
+                - **MAPE** (Mean Absolute Percentage Error) - средняя абсолютная процентная ошибка. Показывает ошибку в процентах.
+                - **SMAPE** (Symmetric Mean Absolute Percentage Error) - симметричная средняя абсолютная процентная ошибка. Более надежна, чем MAPE, при значениях близких к нулю.
+                - **MASE** (Mean Absolute Scaled Error) - масштабированная средняя абсолютная ошибка. Значения < 1 означают, что модель лучше наивного прогноза.
+                - **R²** - коэффициент детерминации. Показывает долю дисперсии, объясненную моделью (1.0 - идеальный прогноз).
+                - **Adjusted R²** - скорректированный R². Учитывает сложность модели, помогает выявить переобучение.
+                """)
         
-        # Для SARIMA добавляем параметры сезонного дифференцирования
-        if model_type == "SARIMA":
-            with col2:
-                D = st.number_input("Порядок сезонного дифференцирования (D)", 
-                                   min_value=0, max_value=1, 
-                                   value=0, step=1)
+        with col2:
+            st.markdown("**Тестовая выборка:**")
+            metrics_test = results['test_metrics']
+            st.metric("RMSE", f"{metrics_test['rmse']:.4f}")
+            st.metric("MAE", f"{metrics_test['mae']:.4f}")
+            st.metric("MAPE", f"{metrics_test.get('mape', np.nan):.4f}")
+            st.metric("SMAPE", f"{metrics_test.get('smape', np.nan):.4f}")
+            st.metric("MASE", f"{metrics_test.get('mase', np.nan):.4f}")
+            st.metric("R²", f"{metrics_test.get('r2', np.nan):.4f}")
+            st.metric("Adjusted R²", f"{metrics_test.get('adj_r2', np.nan):.4f}")
             
-            s = st.number_input("Сезонный период (s)", 
-                               min_value=1, max_value=52, 
-                               value=12 if freq in ['M', 'ME'] else 
-                                    4 if freq in ['Q', 'QE'] else 
-                                    7 if freq in ['W', 'WE'] else 
-                                    24 if freq in ['H'] else 12,
-                               step=1)
-            
-            # Обновляем параметры SARIMA в session_state
-            st.session_state.sarima_params['d'] = d
-            st.session_state.sarima_params['D'] = D
-            st.session_state.sarima_params['s'] = s
-            
-            # Применяем дифференцирование
-            if d > 0 or D > 0:
-                differenced_data = apply_differencing(train_data, d, D, s)
+            with st.expander("Как интерпретировать результаты?"):
+                st.markdown("""
+                **Хорошими показателями** считаются:
                 
-                # Отображаем эффект дифференцирования
-                diff_order = f"{'первого' if d == 1 else 'второго' if d == 2 else ''} порядка"
-                if D > 0:
-                    diff_order += f" и сезонного порядка {D}"
+                1. **RMSE и MAE** - чем меньше, тем лучше. Сравнивайте с масштабом ваших данных.
                 
-                diff_fig = display_differencing_effect(train_data, differenced_data, diff_order)
-                st.pyplot(diff_fig)
-            else:
-                differenced_data = train_data
-                st.info("Дифференцирование не применялось.")
-        
-        else:  # ARIMA
-            # Обновляем параметр d в session_state
-            st.session_state.arima_params['d'] = d
-            
-            # Применяем дифференцирование
-            if d > 0:
-                differenced_data = apply_differencing(train_data, d)
+                2. **MAPE**:
+                   - < 10%: отличный прогноз
+                   - 10-20%: хороший прогноз
+                   - 20-50%: приемлемый прогноз
+                   - > 50%: плохой прогноз
                 
-                # Отображаем эффект дифференцирования
-                diff_order = f"{'первого' if d == 1 else 'второго' if d == 2 else ''} порядка"
-                diff_fig = display_differencing_effect(train_data, differenced_data, diff_order)
-                st.pyplot(diff_fig)
-            else:
-                differenced_data = train_data
-                st.info("Дифференцирование не применялось.")
-    
-    # Проверяем стационарность после дифференцирования
-    if model_type != "ARMA" and (d > 0 or (model_type == "SARIMA" and D > 0)):
-        st.subheader("Стационарность после дифференцирования")
-        diff_stationarity = check_stationarity(differenced_data.dropna())
-        display_stationarity_results(diff_stationarity)
-    
-    # Анализ ACF и PACF
-    st.subheader("Анализ ACF и PACF")
-    acf_pacf_fig = plot_acf_pacf_plotly(differenced_data)
-    st.plotly_chart(acf_pacf_fig, use_container_width=True)
-    
-    # Получаем рекомендации по параметрам
-    seasonal = model_type == "SARIMA"
-    seasonal_period = s if seasonal and 's' in locals() else None
-    suggested_params = suggest_arima_params(differenced_data, seasonal, seasonal_period)
-    
-    # Настройка параметров модели - вкладки для ручного и автоматического подбора
-    st.subheader("Параметры модели")
-    
-    param_tabs = st.tabs(["Ручной подбор параметров", "Автоматический подбор параметров"])
-    
-    with param_tabs[0]:  # Ручной подбор параметров
-        # Отображаем параметры в зависимости от типа модели
-        if model_type == "ARMA":
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                p = st.number_input("Порядок AR (p)", min_value=0, max_value=5, 
-                                   value=suggested_params['p'], step=1)
-            
-            with col2:
-                q = st.number_input("Порядок MA (q)", min_value=0, max_value=5, 
-                                   value=suggested_params['q'], step=1)
-            
-            # Обновляем параметры в session_state
-            st.session_state.arma_params['p'] = p
-            st.session_state.arma_params['q'] = q
-            
-        elif model_type == "ARIMA":
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                p = st.number_input("Порядок AR (p)", min_value=0, max_value=5, 
-                                   value=suggested_params['p'], step=1)
-            
-            with col2:
-                q = st.number_input("Порядок MA (q)", min_value=0, max_value=5, 
-                                   value=suggested_params['q'], step=1)
-            
-            # Отображаем параметр d, но не даем его изменить здесь
-            st.info(f"Порядок дифференцирования (d): {d}")
-            
-            # Обновляем параметры в session_state
-            st.session_state.arima_params['p'] = p
-            st.session_state.arima_params['q'] = q
-            
-        elif model_type == "SARIMA":
-            st.markdown("### Несезонные компоненты")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                p = st.number_input("Порядок AR (p)", min_value=0, max_value=5, 
-                                   value=suggested_params['p'], step=1)
-            
-            with col2:
-                q = st.number_input("Порядок MA (q)", min_value=0, max_value=5, 
-                                   value=suggested_params['q'], step=1)
-            
-            # Отображаем параметр d, но не даем его изменить здесь
-            st.info(f"Порядок дифференцирования (d): {d}")
-            
-            st.markdown("### Сезонные компоненты")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                P = st.number_input("Сезонный AR (P)", min_value=0, max_value=2, 
-                                   value=suggested_params['P'], step=1)
-            
-            with col2:
-                Q = st.number_input("Сезонный MA (Q)", min_value=0, max_value=2, 
-                                   value=suggested_params['Q'], step=1)
-            
-            # Отображаем параметры D и s, но не даем их изменить здесь
-            st.info(f"Сезонное дифференцирование (D): {D}")
-            st.info(f"Сезонный период (s): {s}")
-            
-            # Обновляем параметры в session_state
-            st.session_state.sarima_params['p'] = p
-            st.session_state.sarima_params['q'] = q
-            st.session_state.sarima_params['P'] = P
-            st.session_state.sarima_params['Q'] = Q
-            
-        # Добавляем кнопку применения параметров и обучения модели
-        if st.button("Применить параметры и обучить модель", key="apply_manual_params"):
-            result = train_model_and_predict(
-                train_data, 
-                test_data, 
-                model_title=f"Прогноз модели {model_type} с заданными параметрами на тестовый период"
-            )
-            
-            if result:
-                model, metrics, forecast_fig = result
+                3. **MASE**:
+                   - < 1: модель лучше наивного прогноза
+                   - ≈ 1: сопоставимо с наивным прогнозом
+                   - > 1: модель хуже наивного прогноза
                 
-                # Отображаем график прогноза
-                st.plotly_chart(forecast_fig, use_container_width=True)
+                4. **R² и Adjusted R²**:
+                   - > 0.9: отличный результат
+                   - 0.7-0.9: хороший результат
+                   - 0.5-0.7: удовлетворительный результат
+                   - < 0.5: модель требует улучшения
                 
-                # Отображаем метрики
-                display_model_metrics(metrics, model_type)
+                5. **Theil's U2**:
+                   - < 0.8: модель значительно лучше наивного прогноза
+                   - 0.8-1: модель сопоставима с наивным прогнозом
+                   - > 1: модель хуже наивного прогноза
                 
-                # Анализ остатков
-                st.subheader("Анализ остатков")
-                display_residuals_analysis(model)
-
-    with param_tabs[1]:  # Автоматический подбор параметров
-        st.markdown("### Автоматический подбор параметров")
+                Если метрики на тестовой выборке значительно хуже, чем на обучающей, это может указывать на переобучение.
+                """)
         
-        st.write("""
-        Автоматический подбор использует алгоритм, который перебирает различные комбинации параметров 
-        и выбирает модель с наилучшим информационным критерием.
-        """)
+        # Информация о модели
+        st.subheader("Информация о модели")
+        st.info(results['model_info'])
         
-        # Настройки для auto_arima
-        auto_col1, auto_col2 = st.columns(2)
-        
-        with auto_col1:
-            information_criterion = st.selectbox(
-                "Информационный критерий", 
-                ["aic", "bic", "aicc", "oob"],
-                index=0,
-                help="Критерий для выбора лучшей модели (меньше = лучше)"
-            )
-        
-        with auto_col2:
-            n_jobs = st.slider(
-                "Количество параллельных процессов", 
-                min_value=1, 
-                max_value=8, 
-                value=1,
-                help="Использование нескольких ядер ускоряет подбор, но требует больше памяти"
-            )
-        
-        # Параметры поиска
-        st.subheader("Диапазон параметров для поиска")
-        
-        param_cols = st.columns(3)
-        
-        with param_cols[0]:
-            max_p = st.slider("Максимальный порядок p", 0, 5, 2)
-            if model_type != "ARMA":
-                max_d = st.slider("Максимальный порядок d", 0, 2, d)
-            max_q = st.slider("Максимальный порядок q", 0, 5, 2)
-        
-        if model_type == "SARIMA":
-            with param_cols[1]:
-                max_P = st.slider("Максимальный порядок P", 0, 2, 1)
-                max_D = st.slider("Максимальный порядок D", 0, 1, D)
-                max_Q = st.slider("Максимальный порядок Q", 0, 2, 1)
-            
-            with param_cols[2]:
-                auto_detect_s = st.checkbox("Автоматически определить период сезонности", value=True)
-                
-                if not auto_detect_s:
-                    seasonal_m = st.number_input(
-                        "Сезонный период m", 
-                        min_value=1,
-                        max_value=52,
-                        value=s,
-                        help="Период сезонности (например, 12 для ежемесячных данных)"
-                    )
-                else:
-                    with st.spinner("Определение периода сезонности..."):
-                        detected_s = auto_detect_seasonality(train_data)
-                        seasonal_m = st.number_input(
-                            "Определенный период сезонности", 
-                            min_value=1,
-                            max_value=52,
-                            value=detected_s,
-                            help="Автоматически определенный период сезонности (можно скорректировать)"
-                        )
-                        st.info(f"Определен период сезонности: {detected_s}")
-        
-        # Кнопка для запуска автоматического подбора
-        if st.button("Запустить автоматический подбор"):
-            with st.spinner("Выполняется подбор оптимальных параметров..."):
+        if hasattr(st.session_state.ar_model, 'fitted_model') and hasattr(st.session_state.ar_model.fitted_model, 'summary'):
+            with st.expander("Подробная статистика модели"):
                 try:
-                    # Параметры для auto_arima
-                    auto_params = {
-                        "information_criterion": information_criterion,
-                        "n_jobs": n_jobs,
-                        "return_all_models": True,
-                        "max_p": max_p,
-                        "max_q": max_q
-                    }
-                    
-                    if model_type != "ARMA":
-                        auto_params["max_d"] = max_d
-                    
-                    if model_type == "SARIMA":
-                        auto_params["seasonal"] = True
-                        auto_params["max_P"] = max_P
-                        auto_params["max_D"] = max_D
-                        auto_params["max_Q"] = max_Q
-                        auto_params["m"] = seasonal_m
-                    else:
-                        auto_params["seasonal"] = False
-                    
-                    # Запускаем auto_arima
-                    auto_result = auto_arima(train_data, **auto_params)
-                    
-                    # Отображаем результаты
-                    st.success("Подбор параметров успешно завершен!")
-                    
-                    if model_type == "SARIMA":
-                        st.markdown(f"""
-                        ### Лучшая модель: SARIMA{auto_result['order']}{auto_result['seasonal_order']}
-                        - AIC: {auto_result['aic']:.2f}
-                        - BIC: {auto_result['bic']:.2f}
-                        """)
-                        
-                        # Обновляем параметры модели в session_state
-                        p, d, q = auto_result['order']
-                        P, D, Q, m = auto_result['seasonal_order']
-                        
-                        st.session_state.sarima_params = {
-                            'p': p, 'd': d, 'q': q,
-                            'P': P, 'D': D, 'Q': Q, 's': m
-                        }
-                    elif model_type == "ARIMA":
-                        st.markdown(f"""
-                        ### Лучшая модель: ARIMA{auto_result['order']}
-                        - AIC: {auto_result['aic']:.2f}
-                        - BIC: {auto_result['bic']:.2f}
-                        """)
-                        
-                        # Обновляем параметры модели в session_state
-                        p, d, q = auto_result['order']
-                        st.session_state.arima_params = {'p': p, 'd': d, 'q': q}
-                    else:  # ARMA
-                        st.markdown(f"""
-                        ### Лучшая модель: ARMA({auto_result['order'][0]}, {auto_result['order'][2]})
-                        - AIC: {auto_result['aic']:.2f}
-                        - BIC: {auto_result['bic']:.2f}
-                        """)
-                        
-                        # Обновляем параметры модели в session_state
-                        p, _, q = auto_result['order']
-                        st.session_state.arma_params = {'p': p, 'q': q}
-                    
-                    # Сохраняем лучшую модель
-                    best_model = auto_result['best_model']
-                    
-                    # Сохраняем лучшую модель как текущую
-                    set_current_model(best_model)
-                    
-                    # Сохраняем модель как текущую активную для всех функций
-                    st.session_state.current_active_model = best_model
-                    st.session_state.last_trained_on = 'train'
-                    
-                    # Сохраняем параметры лучшей модели для отображения
-                    if model_type == "ARMA":
-                        p, _, q = auto_result['order']
-                        st.session_state.model_params = {'p': p, 'q': q}
-                    elif model_type == "ARIMA":
-                        p, d, q = auto_result['order']
-                        st.session_state.model_params = {'p': p, 'd': d, 'q': q}
-                    elif model_type == "SARIMA":
-                        p, d, q = auto_result['order']
-                        P, D, Q, m = auto_result['seasonal_order']
-                        st.session_state.model_params = {
-                            'p': p, 'd': d, 'q': q,
-                            'P': P, 'D': D, 'Q': Q, 's': m
-                        }
-                    
-                    # Генерируем прогноз
-                    forecast_fig = plot_forecast_plotly(
-                        best_model, 
-                        steps=len(test_data),
-                        train_data=train_data,
-                        test_data=test_data,
-                        title="Прогноз лучшей модели на тестовом периоде"
-                    )
-                    
-                    st.plotly_chart(forecast_fig, use_container_width=True)
-                    
-                    # Рассчитываем метрики
-                    metrics = evaluate_model_performance(best_model, train_data, test_data)
-                    
-                    display_model_metrics(metrics, model_type)
-                    
-                except Exception as e:
-                    st.error(f"Ошибка при автоматическом подборе параметров: {str(e)}")
-    
-    # Обучение модели и прогнозирование
-    st.subheader("Обучение модели и прогнозирование")
-    
-    # Создаем вкладки для обучения и прогнозирования
-    train_forecast_tabs = st.tabs(["Оценка на тестовой выборке", "Прогноз в будущее"])
-    
-    # Сбрасываем флаг run_future_forecast при первой загрузке страницы
-    # и когда модель меняет тип
-    tab_key = f"tab_{model_type}"
-    if 'last_tab' not in st.session_state or st.session_state.last_tab != tab_key:
-        st.session_state.run_future_forecast = False
-        st.session_state.last_tab = tab_key
-    
-    with train_forecast_tabs[0]:
-        # Проверяем, есть ли уже обученная модель
-        if st.session_state.get('current_active_model'):
-            st.success(f"Модель {model_type} уже обучена с параметрами: {display_model_information(st.session_state.current_active_model)}")
+                    st.text(st.session_state.ar_model.fitted_model.summary())
+                except:
+                    st.warning("Не удалось получить подробную статистику модели.")
         
-        st.write("Нажмите кнопку ниже, чтобы обучить модель и произвести тестирование на отложенной выборке.")
+        # Отображение прогнозов
+        st.subheader("Результаты прогнозирования")
         
-        if st.button("Обучить и протестировать модель", key="train_and_test"):
-            # Если уже есть обученная модель, используем ее
-            if st.session_state.get('current_active_model'):
-                # Получаем тип модели
-                current_model = st.session_state.current_active_model
-                if hasattr(current_model, 'model_name'):
-                    model_type_from_obj = current_model.model_name
-                else:
-                    model_type_from_obj = current_model.get_params().get('type')
-                    
-                if model_type_from_obj == model_type:
-                    model = current_model
-                    st.info(f"Используется ранее обученная модель {model_type}")
-                    
-                    # Генерируем прогноз и метрики
-                    forecast_fig = plot_forecast_plotly(
-                        model, 
-                        steps=len(test_data),
-                        train_data=train_data,
-                        test_data=test_data,
-                        title=f"Оценка модели {model_type} на тестовой выборке"
-                    )
-                    
-                    # Отображаем график прогноза
-                    st.plotly_chart(forecast_fig, use_container_width=True)
-                    
-                    # Отображаем метрики
-                    metrics = evaluate_model_performance(model, train_data, test_data)
-                    display_model_metrics(metrics, model_type)
-                    
-                    # Анализ остатков
-                    st.subheader("Анализ остатков")
-                    display_residuals_analysis(model)
-                    
-                    # Устанавливаем состояние обучения
-                    st.session_state.last_trained_on = 'train'
-                else:
-                    result = train_model_and_predict(
-                        train_data, 
-                        test_data, 
-                        model_title=f"Оценка модели {model_type} на тестовой выборке"
-                    )
-                    
-                    if result:
-                        model, metrics, forecast_fig = result
-                        
-                        # Сохраняем модель как текущую активную
-                        st.session_state.current_active_model = model
-                        st.session_state.last_trained_on = 'train'
-                        
-                        # Отображаем график прогноза
-                        st.plotly_chart(forecast_fig, use_container_width=True)
-                        
-                        # Отображаем метрики
-                        display_model_metrics(metrics, model_type)
-                        
-                        # Анализ остатков
-                        st.subheader("Анализ остатков")
-                        display_residuals_analysis(model)
-            else:
-                result = train_model_and_predict(
-                    train_data, 
-                    test_data, 
-                    model_title=f"Оценка модели {model_type} на тестовой выборке"
-                )
-                
-                if result:
-                    model, metrics, forecast_fig = result
-                    
-                    # Сохраняем модель как текущую активную
-                    st.session_state.current_active_model = model
-                    st.session_state.last_trained_on = 'train'
-                    
-                    # Отображаем график прогноза
-                    st.plotly_chart(forecast_fig, use_container_width=True)
-                    
-                    # Отображаем метрики
-                    display_model_metrics(metrics, model_type)
-                    
-                    # Анализ остатков
-                    st.subheader("Анализ остатков")
-                    display_residuals_analysis(model)
-    
-    with train_forecast_tabs[1]:
-        st.write("Эта вкладка позволяет сделать прогноз за пределы имеющихся данных.")
-        st.info("Для прогноза на будущее модель будет переобучена на всем наборе данных, включая тестовую выборку.")
-        
-        # Получаем текущую модель
-        current_model = st.session_state.get('current_active_model')
-        
-        if current_model and current_model.is_fitted:
-            # Проверяем, соответствует ли текущая модель выбранному типу
-            # Сначала пробуем получить тип через атрибут model_name, если он есть
-            if hasattr(current_model, 'model_name'):
-                model_type_from_obj = current_model.model_name
-            else:
-                # Если атрибута нет, используем get_params()
-                model_type_from_obj = current_model.get_params().get('type')
+        # Проверяем наличие необходимых ключей для построения графика
+        if all(key in results for key in ['original_series', 'train', 'test', 'test_predictions']):
+            # Создаем график с результатами (plotly для Streamlit)
+            fig = plot_forecast_plotly(
+                model=st.session_state.ar_model,
+                steps=len(results['test']),
+                original_data=results['original_series'],
+                train_data=results['train'],
+                test_data=results['test'],
+                title="Результаты прогнозирования"
+            )
+            fig.update_layout(
+                height=500
+            )
+            st.plotly_chart(fig, use_container_width=True)
             
-            # Отображаем информацию о текущей модели
-            st.success(f"Текущая модель: {model_type_from_obj} с параметрами: {display_model_information(current_model)}")
+            # --- Секция: СКАЧАТЬ ОТЧЕТ ---
+            # График прогноза (matplotlib -> base64)
+            forecast_fig = plot_forecast_matplotlib(
+                model=st.session_state.ar_model,
+                steps=len(results['test']),
+                original_data=results['original_series'],
+                train_data=results['train'],
+                test_data=results['test'],
+                title="Результаты прогнозирования"
+            )
+            forecast_img_base64 = reporting.save_plot_to_base64(forecast_fig, backend='matplotlib')
             
-            if model_type_from_obj != model_type:
-                st.warning(f"Текущая обученная модель ({model_type_from_obj}) отличается от выбранного типа ({model_type}). Для продолжения сначала обучите модель {model_type}.")
-            else:
-                # Определяем разумное максимальное количество шагов для прогноза
-                max_steps = min(int(len(data) * 0.5), 100)
-                
-                # Используем session_state для сохранения значения слайдера
-                if 'future_steps' not in st.session_state:
-                    st.session_state.future_steps = min(12, max_steps)
-                
-                future_steps = st.slider("Количество периодов для прогноза", 1, max_steps, st.session_state.future_steps, key='future_steps_slider')
-                st.session_state.future_steps = future_steps
-                
-                if st.button("Сделать прогноз в будущее", key='future_forecast_button'):
-                    st.session_state.run_future_forecast = True
-                    # Добавляем перезагрузку страницы для активации изменения состояния
-                    st.rerun()
-                
-                if st.session_state.get('run_future_forecast', False):
-                    # Проверяем, нужно ли переобучать модель на полных данных
-                    need_retrain = True
-                    if st.session_state.last_trained_on == 'full':
-                        need_retrain = False
-                    
-                    if need_retrain:
-                        # Обучаем модель на всех данных
-                        with st.spinner("Переобучаем модель на полном наборе данных..."):
-                            full_model = fit_selected_model(data)
-                            
-                            if full_model:
-                                # Сохраняем модель и ее параметры
-                                st.session_state.current_active_model = full_model
-                                st.session_state.last_trained_on = 'full'
-                                
-                                # Сохраняем параметры модели в session_state для отображения
-                                if model_type == "ARMA":
-                                    st.session_state.model_params = {'p': full_model.p, 'q': full_model.q}
-                                elif model_type == "ARIMA":
-                                    st.session_state.model_params = {'p': full_model.p, 'd': full_model.d, 'q': full_model.q}
-                                elif model_type == "SARIMA":
-                                    st.session_state.model_params = {
-                                        'p': full_model.p, 'd': full_model.d, 'q': full_model.q,
-                                        'P': full_model.P, 'D': full_model.D, 'Q': full_model.Q, 's': full_model.m
-                                    }
-                                
-                                st.success(f"Модель успешно переобучена на полных данных с параметрами: {display_model_information(full_model)}")
-                            else:
-                                st.error("Не удалось переобучить модель на полных данных.")
-                                st.stop()
-                    else:
-                        full_model = current_model
-                        st.info("Используется ранее обученная модель на полных данных")
-                        
-                        # Отображаем сохраненные параметры модели
-                        if hasattr(st.session_state, 'model_params'):
-                            params_str = ", ".join([f"{k}={v}" for k, v in st.session_state.model_params.items()])
-                            st.write(f"Параметры модели: {params_str}")
-                    
-                    if full_model and full_model.is_fitted:
-                        try:
-                            future_result = make_future_forecast(
-                                full_model, 
-                                data, 
-                                future_steps,
-                                title=f"Прогноз модели {model_type} на {future_steps} периодов вперед"
-                            )
-                            
-                            if future_result:
-                                future_fig, future_df = future_result
-                                
-                                # Проверка, что future_fig является объектом Figure
-                                if hasattr(future_fig, 'update_layout'):
-                                    st.plotly_chart(future_fig, use_container_width=True)
-                                else:
-                                    st.warning("Не удалось создать график прогноза. Используйте только DataFrame.")
-                                
-                                # Отображаем таблицу с прогнозом
-                                st.dataframe(future_df)
-                                
-                                # Предлагаем скачать прогноз
-                                csv = future_df.to_csv()
-                                st.download_button(
-                                    label="Скачать прогноз как CSV",
-                                    data=csv,
-                                    file_name=f'{model_type}_forecast_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
-                                    mime='text/csv',
-                                )
-                                
-                                # Сохраняем результат прогноза в session_state
-                                st.session_state.forecast_results = future_df
-                                
-                                # Добавляем кнопку для сброса прогноза
-                                if st.button("Сбросить прогноз", key="reset_forecast"):
-                                    st.session_state.run_future_forecast = False
-                                    st.rerun()
-                                
-                        except Exception as e:
-                            st.error(f"Ошибка при создании прогноза: {str(e)}")
-                            st.exception(e)
-                    else:
-                        st.error("Не удалось обучить модель на полном наборе данных.")
+            # Создаем пустой график для потерь (не применимо к ARIMA/SARIMA)
+            loss_fig, ax = plt.subplots(figsize=(8, 4))
+            ax.text(0.5, 0.5, "Для авторегрессионных моделей график потерь не применим", 
+                   ha='center', va='center', fontsize=12)
+            ax.set_axis_off()
+            loss_img_base64 = reporting.save_plot_to_base64(loss_fig, backend='matplotlib')
+            
+            # Описание и параметры
+            description = f"Прогнозирование временного ряда с помощью авторрегрессионной модели {results['model_info']}."
+            params = {
+                'Размер обучающей выборки': train_size,
+                'Тип модели': st.session_state.ar_model.__class__.__name__,
+            }
+            # Добавляем параметры модели
+            params.update(results['params'])
+            
+            md_report = reporting.generate_markdown_report(
+                title="Отчет по эксперименту авторрегрессионной модели",
+                description=description,
+                metrics_train=results['train_metrics'],
+                metrics_test=results['test_metrics'],
+                train_time=results['train_time'],
+                forecast_img_base64=forecast_img_base64,
+                loss_img_base64=loss_img_base64,
+                params=params,
+                early_stopping=False,
+                early_stopping_epoch=None
+            )
+            
+            # Генерируем PDF (если возможно)
+            try:
+                pdf_bytes = reporting.markdown_to_pdf(md_report)
+            except Exception as e:
+                pdf_bytes = None
+                st.warning(f"Не удалось сгенерировать PDF: {e}")
+            
+            reporting.download_report_buttons(
+                md_report, 
+                pdf_bytes, 
+                md_filename="arima_report.md", 
+                pdf_filename="arima_report.pdf"
+            )
+            # --- Конец секции отчета ---
         else:
-            st.warning("Сначала обучите модель на вкладке 'Оценка на тестовой выборке'.")
-
+            st.warning("Не удалось отобразить график прогнозирования из-за отсутствия необходимых данных.")
+        
+        # СЕКЦИЯ: Прогноз в будущее по уже обученной модели
+        if st.session_state.ar_model is not None:
+            st.subheader("Прогноз на будущее по обученной модели")
+            future_steps = st.number_input(
+                "Шаги прогноза вперед", min_value=1, max_value=100, value=10, step=1, key="future_steps")
+            
+            if st.button("Сделать прогноз в будущее"):
+                try:
+                    future_preds = st.session_state.ar_model.predict(steps=int(future_steps))
+                    
+                    # График прогноза
+                    future_fig = plot_forecast_plotly(
+                        model=st.session_state.ar_model,
+                        steps=int(future_steps),
+                        original_data=results['original_series'],
+                        train_data=results['train'],
+                        title="Прогноз на будущее"
+                    )
+                    st.plotly_chart(future_fig, use_container_width=True)
+                    
+                    # Таблица прогноза
+                    st.dataframe(pd.DataFrame({'Прогнозируемое значение': future_preds}))
+                    
+                    # Кнопка для скачивания
+                    csv = future_preds.to_csv(index=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    st.download_button(
+                        label="Скачать прогноз (CSV)",
+                        data=csv,
+                        file_name=f"arima_forecast_{timestamp}.csv",
+                        mime="text/csv"
+                    )
+                except Exception as e:
+                    st.error(f"Ошибка при прогнозе в будущее: {str(e)}")
+    # Если модель еще не обучена, покажем инструкции
+    else:
+        st.info("Выберите режим настройки и нажмите 'Запустить обучение' для начала анализа.")
 
 if __name__ == "__main__":
     main()

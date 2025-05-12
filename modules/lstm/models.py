@@ -319,7 +319,8 @@ class LSTMModel(BaseTimeSeriesModel):
     
     def fit(self, series: pd.Series, epochs: int = 100, batch_size: int = 32,
             validation_split: float = 0.1, early_stopping: bool = True,
-            patience: int = 10, verbose: int = 0, train_size: float = 0.8) -> 'LSTMModel':
+            patience: int = 10, verbose: int = 0, train_size: float = 0.8,
+            callbacks=None) -> 'LSTMModel':
         """
         Обучение модели на временном ряде.
         
@@ -341,6 +342,8 @@ class LSTMModel(BaseTimeSeriesModel):
             Уровень вывода информации во время обучения
         train_size : float, default=0.8
             Доля данных для обучения
+        callbacks : list, optional
+            Список кастомных коллбэков для передачи в модель
             
         Возвращает:
         -----------

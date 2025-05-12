@@ -9,6 +9,7 @@ st.set_page_config(page_title="Анализ аномалий во временн
 
 from modules.anomaly_module import (
     generate_anomalous_series,
+    add_anomalies_to_existing_data,
     z_score_detection,
     iqr_detection,
     hampel_filter,
@@ -23,18 +24,65 @@ if 'anomalies' not in st.session_state:
         'sensor': []
     }
 
+# Проверка наличия загруженных данных согласно подходу в template
+has_loaded_data = 'time_series' in st.session_state and st.session_state.time_series is not None and not st.session_state.time_series.empty
+
 # ====================
 # КОНФИГУРАЦИЯ ИНТЕРФЕЙСА
 # ====================
-st.title("Генератор временных рядов с аномалиями")
+st.title("Анализ временных рядов с аномалиями")
 
 with st.sidebar:
-    st.header("Параметры генерации")
+    st.header("Настройки данных")
     
-    # Основные параметры
-    n = st.slider("Длина ряда", 100, 1000, 300)
-    season_amp = st.slider("Амплитуда сезонности", 0.0, 2.0, 0.5)
-    noise_std = st.slider("Уровень шума", 0.0, 1.0, 0.2)
+    # Выбор источника данных
+    data_source = st.radio(
+        "Источник данных",
+        ["Синтетические данные", "Загруженные данные"],
+        index=1 if has_loaded_data else 0,
+        disabled=not has_loaded_data
+    )
+    
+    if data_source == "Загруженные данные" and not has_loaded_data:
+        st.warning("Нет загруженных данных. Сначала загрузите данные на главной странице.")
+        data_source = "Синтетические данные"
+    
+    if data_source == "Загруженные данные":
+        st.info("Используются данные, загруженные на главной странице")
+        
+        # Получаем информацию о выбранной колонке из session_state
+        main_column = st.session_state.get("main_column", None)
+        
+        # Выбор столбца с данными, если main_column не определен или данные - DataFrame с несколькими столбцами
+        if has_loaded_data:
+            time_series = st.session_state.time_series
+            
+            if isinstance(time_series, pd.DataFrame):
+                numeric_cols = time_series.select_dtypes(include=[np.number]).columns.tolist()
+                if len(numeric_cols) > 1:
+                    # Если есть main_column, используем его как значение по умолчанию
+                    default_idx = numeric_cols.index(main_column) if main_column in numeric_cols else 0
+                    selected_column = st.selectbox("Выберите столбец с данными", numeric_cols, index=default_idx)
+                elif len(numeric_cols) == 1:
+                    selected_column = numeric_cols[0]
+                    st.success(f"Выбран единственный числовой столбец: {selected_column}")
+                else:
+                    selected_column = None
+                    st.error("Нет числовых столбцов в загруженных данных")
+                    data_source = "Синтетические данные"
+            elif isinstance(time_series, pd.Series):
+                selected_column = time_series.name if time_series.name else "Value"
+                st.success(f"Используется временной ряд: {selected_column}")
+            else:
+                st.error(f"Неподдерживаемый тип данных: {type(time_series)}")
+                data_source = "Синтетические данные"
+    
+    # Основные параметры для синтетических данных
+    if data_source == "Синтетические данные":
+        st.header("Параметры генерации")
+        n = st.slider("Длина ряда", 100, 1000, 300)
+        season_amp = st.slider("Амплитуда сезонности", 0.0, 2.0, 0.5)
+        noise_std = st.slider("Уровень шума", 0.0, 1.0, 0.2)
     
     # Ручная настройка аномалий
     st.subheader("Ручная настройка аномалий")
@@ -55,8 +103,10 @@ with st.sidebar:
                         if not i_clean.isdigit():
                             raise ValueError(f"Некорректный индекс: {i_clean}")
                         idx = int(i_clean)
-                        if idx < 0 or idx >= n:
-                            raise ValueError(f"Индекс {idx} вне диапазона [0, {n-1}]")
+                        # Получаем максимальный допустимый индекс в зависимости от источника данных
+                        max_idx = n - 1 if data_source == "Синтетические данные" else len(st.session_state.time_series) - 1
+                        if idx < 0 or idx > max_idx:
+                            raise ValueError(f"Индекс {idx} вне диапазона [0, {max_idx}]")
                         indices.append(idx)
                 indices = list(set(indices))  # удаление дубликатов
                 
@@ -74,8 +124,12 @@ with st.sidebar:
     
     # Протяженные аномалии
     with st.expander("📏 Протяженные аномалии"):
-        ext_start = st.number_input("Начальный индекс", 0, n-1, 80, key="ext_start")
-        ext_duration = st.number_input("Длительность", 1, 100, 25, key="ext_dur")
+        # Получаем максимальный допустимый индекс в зависимости от источника данных
+        max_idx = n - 1 if data_source == "Синтетические данные" else len(st.session_state.time_series) - 1 if has_loaded_data else 299
+        
+        ext_start = st.number_input("Начальный индекс", 0, max_idx, min(80, max_idx), key="ext_start")
+        ext_duration = st.number_input("Длительность", 1, min(100, max_idx - ext_start + 1), 
+                                       min(25, max_idx - ext_start + 1), key="ext_dur")
         ext_shift = st.number_input("Смещение уровня", -5.0, 5.0, -2.5, key="ext_shift")
         
         if st.button("Добавить протяженную аномалию"):
@@ -85,11 +139,16 @@ with st.sidebar:
                 'level_shift': ext_shift
             }
             st.session_state.anomalies['extended'].append(new_anom)
+            st.success(f"Добавлена протяженная аномалия начиная с индекса {ext_start}")
     
     # Сбои датчиков
     with st.expander("⚠️ Сбои датчиков"):
-        fault_start = st.number_input("Начало сбоя", 0, n-1, 220, key="fault_start")
-        fault_duration = st.number_input("Длительность сбоя", 1, 100, 35, key="fault_dur")
+        # Получаем максимальный допустимый индекс в зависимости от источника данных
+        max_idx = n - 1 if data_source == "Синтетические данные" else len(st.session_state.time_series) - 1 if has_loaded_data else 299
+        
+        fault_start = st.number_input("Начало сбоя", 0, max_idx, min(220, max_idx), key="fault_start")
+        fault_duration = st.number_input("Длительность сбоя", 1, min(100, max_idx - fault_start + 1), 
+                                        min(35, max_idx - fault_start + 1), key="fault_dur")
         fault_value = st.selectbox("Значение", ["NaN", "0", "1", "Другое"], key="fault_val")
         custom_value = st.number_input("Свое значение", key="custom_fault") if fault_value == "Другое" else None
         
@@ -103,33 +162,82 @@ with st.sidebar:
                 'fault_value': value
             }
             st.session_state.anomalies['sensor'].append(new_anom)
+            st.success(f"Добавлен сбой датчика начиная с индекса {fault_start}")
     
     # Кнопка сброса
     if st.button("Очистить все аномалии"):
         st.session_state.anomalies = {'point': [], 'extended': [], 'sensor': []}
+        st.success("Все аномалии удалены")
 
 # ====================
-# ГЕНЕРАЦИЯ ДАННЫХ
+# ГЕНЕРАЦИЯ ИЛИ ЗАГРУЗКА ДАННЫХ
 # ====================
 @st.cache_data
 def generate_data(params):
     return generate_anomalous_series(**params)
 
-generation_params = {
-    'n': n,
-    'season_amp': season_amp,
-    'noise_std': noise_std,
-    'point_anomalies': st.session_state.anomalies['point'],
-    'extended_anomalies': st.session_state.anomalies['extended'],
-    'sensor_faults': st.session_state.anomalies['sensor']
-}
+@st.cache_data
+def add_anomalies_to_real_data(data, _time, params):
+    data_with_anomalies, anomaly_info = add_anomalies_to_existing_data(
+        data, _time, 
+        point_anomalies=params['point_anomalies'],
+        extended_anomalies=params['extended_anomalies'],
+        sensor_faults=params['sensor_faults']
+    )
+    return data_with_anomalies, anomaly_info
 
 try:
-    # Получаем данные, время и метаданные
-    data, time, metadata = generate_data(generation_params)
-    df = pd.DataFrame({'data': data, 'time': time})
+    if data_source == "Синтетические данные":
+        # Генерация синтетических данных
+        generation_params = {
+            'n': n,
+            'season_amp': season_amp,
+            'noise_std': noise_std,
+            'point_anomalies': st.session_state.anomalies['point'],
+            'extended_anomalies': st.session_state.anomalies['extended'],
+            'sensor_faults': st.session_state.anomalies['sensor']
+        }
+        
+        # Получаем данные, время и метаданные
+        data, time, metadata = generate_data(generation_params)
+        df = pd.DataFrame({'data': data, 'time': time})
+        original_data = None
+    else:
+        # Использование реальных данных из st.session_state.time_series
+        time_series = st.session_state.time_series
+        
+        if isinstance(time_series, pd.Series):
+            # Если Series, используем его напрямую
+            original_data = time_series.values
+            time_index = time_series.index
+        elif isinstance(time_series, pd.DataFrame) and selected_column in time_series.columns:
+            # Если DataFrame, выбираем нужную колонку
+            original_data = time_series[selected_column].values
+            time_index = time_series.index
+        else:
+            st.error("Не удалось получить данные из выбранного источника")
+            st.stop()
+        
+        # Добавляем аномалии к реальным данным
+        anomaly_params = {
+            'point_anomalies': st.session_state.anomalies['point'],
+            'extended_anomalies': st.session_state.anomalies['extended'],
+            'sensor_faults': st.session_state.anomalies['sensor']
+        }
+        
+        data_with_anomalies, metadata = add_anomalies_to_real_data(original_data, time_index, anomaly_params)
+        
+        # Создаем DataFrame с оригинальными и модифицированными данными
+        df = pd.DataFrame({
+            'original': original_data,
+            'data': data_with_anomalies,
+            'time': time_index
+        })
+        
+        # Используем только модифицированные данные для анализа аномалий
+        data = data_with_anomalies
 except Exception as e:
-    st.error(f"Ошибка генерации данных: {str(e)}")
+    st.error(f"Ошибка обработки данных: {str(e)}")
     st.stop()
 
 # ====================
@@ -177,14 +285,38 @@ with st.sidebar:
     with st.expander("🔍 Фильтр Хампеля", expanded=True):
         use_hampel = st.checkbox("Использовать Хампель", value=True,
                                 help="Устойчивый метод на основе медиан и MAD")
-        hampel_window = st.slider("Размер окна", 5, 50, 20, step=5,
-                                 help=(
-                                     "Количество точек для расчета локальной медианы:\n"
-                                     "• Меньшие значения: выше чувствительность к локальным изменениям\n"
-                                     "• Большие значения: устойчивее к шумам\n"
-                                     "Рекомендуется: 10-30 для рядов длиной 300-1000 точек"
-                                 ))
-        hampel_sigma = st.slider("Коэффициент чувствительности", 1.0, 5.0, 3.0, step=0.5,
+        
+        # Добавляем опцию для адаптивного размера окна
+        hampel_adaptive = st.checkbox("Адаптивный размер окна", value=True, 
+                                     help="Размер окна рассчитывается как процент от длины ряда")
+        
+        if hampel_adaptive:
+            # Если выбран адаптивный режим, показываем слайдер для процента
+            hampel_window_percent = st.slider("Процент от длины ряда (%)", 0.1, 5.0, 0.5, step=0.1,
+                                            help=(
+                                                "Размер окна как процент от длины ряда:\n"
+                                                "• Меньшие значения: выше чувствительность к локальным изменениям\n"
+                                                "• Большие значения: рассматривается более глобальный контекст\n"
+                                                "Рекомендуется: 0.5-1% для ежеминутных данных за недели"
+                                            ))
+            # Рассчитываем приблизительный размер окна для текущих данных
+            if data_source == "Загруженные данные" and "time_series" in st.session_state:
+                approx_window = max(5, min(int(len(st.session_state.time_series) * hampel_window_percent / 100), 
+                                        len(st.session_state.time_series) // 5))
+                st.info(f"Примерный размер окна для текущего ряда: {approx_window} точек")
+            hampel_window = 0  # Устанавливаем в 0, чтобы использовалось значение процента
+        else:
+            # Если адаптивный режим выключен, используем обычный слайдер для окна
+            hampel_window = st.slider("Размер окна", 5, 500, 20, step=5,
+                                    help=(
+                                        "Количество точек для расчета локальной медианы:\n"
+                                        "• Меньшие значения: выше чувствительность к локальным изменениям\n"
+                                        "• Большие значения: устойчивее к шумам\n"
+                                        "Для больших рядов (>10K точек) рекомендуется 50-200"
+                                    ))
+            hampel_window_percent = 0.5  # Значение по умолчанию, не будет использоваться
+        
+        hampel_sigma = st.slider("Коэффициент чувствительности", 1.0, 5.0, 3.0, step=0.1,
                                 help=(
                                     "Множитель для медианного абсолютного отклонения (MAD):\n"
                                     "• 3.0 соответствует ~3σ в нормальном распределении\n"
@@ -226,11 +358,13 @@ def detect_all_anomalies(data):
         z_outliers = z_score_detection(data, z_threshold)
         results['z_outliers'] = z_outliers
     
-    # Hampel
+    # Hampel - обновляем вызов с новыми параметрами
     if use_hampel:
         results['hampel_outliers'] = hampel_filter(data, 
                                                   window=hampel_window, 
-                                                  sigma=hampel_sigma)
+                                                  sigma=hampel_sigma,
+                                                  adaptive_window=hampel_adaptive,
+                                                  window_percent=hampel_window_percent)
     
     # IQR
     if use_iqr:
@@ -282,11 +416,23 @@ method_flags = {
 }
 
 fig = make_subplots()
+
+# Если используются реальные данные, показываем оригинальные данные
+if data_source == "Загруженные данные" and 'original' in df.columns:
+    fig.add_trace(go.Scatter(
+        x=df['time'], 
+        y=df['original'],
+        mode='lines',
+        name='Исходный ряд',
+        line=dict(color='lightblue', width=1, dash='dot'),
+        opacity=0.6
+    ))
+
 fig.add_trace(go.Scatter(
     x=df['time'], 
     y=df['data'],
     mode='lines',
-    name='Исходный ряд',
+    name='Ряд с аномалиями' if data_source == "Загруженные данные" else 'Исходный ряд',
     line=dict(color='blue', width=1.5),
     opacity=0.7
 ))
@@ -370,9 +516,28 @@ for i, (name, value) in enumerate(stats):
 # ====================
 # ЭКСПОРТ ДАННЫХ
 # ====================
+if data_source == "Загруженные данные" and 'original' in df.columns:
+    # Для реальных данных предлагаем скачать данные с добавленными аномалиями
+    export_df = pd.DataFrame({
+        'original_data': df['original'],
+        'data_with_anomalies': df['data']
+    })
+    
+    # Если исходный DataFrame имел DatetimeIndex, сохраняем его
+    if isinstance(st.session_state.data.index, pd.DatetimeIndex):
+        export_df.index = st.session_state.data.index
+    
+    download_label = "Скачать данные с аномалиями"
+    download_filename = 'time_series_with_anomalies.csv'
+else:
+    # Для синтетических данных экспортируем только сгенерированный ряд
+    export_df = df
+    download_label = "Скачать данные"
+    download_filename = 'synthetic_time_series.csv'
+
 st.download_button(
-    label="Скачать данные",
-    data=df.to_csv(index=False).encode('utf-8'),
-    file_name='time_series.csv',
+    label=download_label,
+    data=export_df.to_csv(index=True).encode('utf-8'),
+    file_name=download_filename,
     mime='text/csv'
 )

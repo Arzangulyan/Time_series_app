@@ -24,6 +24,10 @@ from modules.lstm import (
 from modules.utils import nothing_selected
 from modules.page_template import setup_page, load_time_series, display_data, run_calculations_on_button_click
 import warnings
+import tensorflow as tf
+import time
+import modules.reporting as reporting
+from modules.lstm.visualization import plot_train_test_results_matplotlib
 
 warnings.filterwarnings("ignore", category=UserWarning, module="keras")
 
@@ -36,6 +40,9 @@ if 'lstm_display_df' not in st.session_state:
     st.session_state.lstm_display_df = None
 if 'lstm_forecast' not in st.session_state:
     st.session_state.lstm_forecast = None
+
+class StreamlitStopTrainingCallback:
+    pass  # Больше не нужен, оставлен для совместимости, не используется
 
 def main():
     setup_page(
@@ -115,7 +122,7 @@ def main():
     sequence_length = st.sidebar.slider(
         "Длина входной последовательности",
         min_value=1,
-        max_value=30,
+        max_value=100,
         value=10,
         step=1,
         help="Количество предыдущих точек для предсказания следующего значения"
@@ -153,11 +160,23 @@ def main():
         help="Количество периодов для прогноза в будущее"
     )
     
+    # Кнопка для остановки обучения
+    if "lstm_stop_training" not in st.session_state:
+        st.session_state.lstm_stop_training = False
+    if st.sidebar.button("Остановить обучение"):
+        st.session_state.lstm_stop_training = True
+    
     # Кнопка для запуска обучения
     run_button = st.sidebar.button("Запустить обучение")
     
     # Запуск обучения
     if run_button:
+        st.session_state.lstm_stop_training = False  # Сброс флага остановки
+        st.subheader("Прогресс обучения")
+        progress_bar_placeholder = st.empty()
+        status_text_placeholder = st.empty()
+        progress_bar = progress_bar_placeholder.progress(0)
+        status_text = status_text_placeholder.empty()
         with st.spinner("Обучение LSTM модели..."):
             try:
                 # Получаем автоматически настроенные параметры LSTM
@@ -165,11 +184,8 @@ def main():
                     time_series, 
                     complexity_level=complexity_map[model_complexity]
                 )
-                
-                # Заменяем некоторые параметры пользовательскими
                 params['sequence_length'] = sequence_length
                 params['epochs'] = epochs
-                
                 # Создаем и обучаем модель
                 lstm_model = LSTMModel(
                     sequence_length=params['sequence_length'],
@@ -177,30 +193,74 @@ def main():
                     dropout_rate=params['dropout_rate'],
                     bidirectional=params['bidirectional']
                 )
-                
-                # Подготавливаем серию (преобразуем DataFrame в Series, если нужно)
                 ts_series = time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series
-                
-                # Обучаем модель
+                # Подготовка данных и инициализация модели (fit с 0 эпох)
                 lstm_model.fit(
                     series=ts_series,
-                    epochs=params['epochs'],
+                    epochs=0,
                     batch_size=params['batch_size'],
                     validation_split=params['validation_split'],
-                    early_stopping=params['early_stopping'],
+                    early_stopping=False,
                     patience=params['patience'],
-                    verbose=1,
-                    train_size=train_size
+                    verbose=0,
+                    train_size=train_size,
+                    callbacks=None
                 )
-                
+                # Явный цикл по эпохам
+                num_epochs = params['epochs']
+                patience = params.get('patience', 10)
+                best_val_loss = float('inf')
+                best_weights = None
+                wait = 0
+                history = {'loss': [], 'val_loss': []}
+                start_time = time.perf_counter()
+                early_stopping_epoch = None
+                for epoch in range(num_epochs):
+                    hist = lstm_model.model.fit(
+                        lstm_model.X_train, lstm_model.y_train,
+                        epochs=1,
+                        batch_size=params['batch_size'],
+                        validation_split=params['validation_split'],
+                        verbose=0
+                    )
+                    loss = hist.history['loss'][0]
+                    val_loss = hist.history['val_loss'][0] if 'val_loss' in hist.history else None
+                    history['loss'].append(loss)
+                    history['val_loss'].append(val_loss)
+                    # EarlyStopping вручную
+                    if val_loss is not None:
+                        if val_loss < best_val_loss:
+                            best_val_loss = val_loss
+                            best_weights = lstm_model.model.get_weights()
+                            wait = 0
+                        else:
+                            wait += 1
+                            if wait >= patience and params.get('early_stopping', True):
+                                status_text.warning(f"Ранняя остановка на эпохе {epoch+1} (val_loss не улучшается {patience} эпох)")
+                                early_stopping_epoch = epoch + 1
+                                break
+                    # Обновление прогресса
+                    progress = (epoch + 1) / num_epochs
+                    progress_bar.progress(progress)
+                    msg = f"Эпоха {epoch + 1}/{num_epochs} | loss: {loss:.4f}"
+                    if val_loss is not None:
+                        msg += f" | val_loss: {val_loss:.4f}"
+                    status_text.text(msg)
+                    if st.session_state.lstm_stop_training:
+                        st.warning("Обучение было остановлено пользователем.")
+                        break
+                train_time = time.perf_counter() - start_time
+                # Восстановление лучших весов, если была ранняя остановка
+                if best_weights is not None:
+                    lstm_model.model.set_weights(best_weights)
+                lstm_model.training_history = history
+                st.success("Модель успешно обучена!")
                 # Получаем результаты обучения и прогнозирования
                 train_predictions = lstm_model.predict_train()
                 test_predictions = lstm_model.predict_test()
-                
                 # Извлекаем реальные значения для метрик
                 train_actual = ts_series[train_predictions.index]
                 test_actual = ts_series[test_predictions.index]
-                
                 # Создаем метрики
                 train_metrics = calculate_metrics(
                     train_actual.values, 
@@ -210,19 +270,17 @@ def main():
                     test_actual.values, 
                     test_predictions.values
                 )
-                
                 # Если нужен прогноз на будущее
                 future_preds = None
                 if forecast_steps > 0:
                     try:
                         # Создаем индекс для будущих прогнозов, обрабатывая возможные исключения
-                        future_index = create_future_index(ts_series.index, forecast_steps)
-                        future_preds = lstm_model.predict(steps=forecast_steps)
+                        future_index = create_future_index(ts_series.index, int(forecast_steps))
+                        future_preds = lstm_model.predict(steps=int(forecast_steps))
                         future_preds = pd.Series(future_preds, index=future_index)
                     except Exception as e:
                         st.warning(f"Не удалось создать прогноз на будущее: {str(e)}")
                         future_preds = None
-                
                 # Сохраняем в session_state
                 st.session_state.lstm_model = lstm_model
                 st.session_state.lstm_results = {
@@ -231,14 +289,14 @@ def main():
                     'future_predictions': future_preds,
                     'train_metrics': train_metrics,
                     'test_metrics': test_metrics,
-                    'original_series': ts_series  # Гарантируем наличие оригинального ряда
+                    'original_series': ts_series,  # Гарантируем наличие оригинального ряда
+                    'train_time': train_time,
+                    'early_stopping': early_stopping_epoch is not None,
+                    'early_stopping_epoch': early_stopping_epoch
                 }
-                
                 # Проверяем доступность истории обучения
                 if hasattr(lstm_model, 'training_history') and lstm_model.training_history is not None:
                     st.session_state.lstm_results['history'] = lstm_model.training_history
-                
-                st.success("Модель успешно обучена!")
             except Exception as e:
                 st.error(f"Ошибка при обучении модели: {str(e)}")
                 return
@@ -250,6 +308,11 @@ def main():
         # Отображение метрик, если они есть
         if 'train_metrics' in results and 'test_metrics' in results:
             st.subheader("Метрики качества прогноза")
+            # Вывод времени обучения
+            if 'train_time' in results:
+                st.caption(f"Время обучения модели: {results['train_time']:.2f} сек.")
+            if results.get('early_stopping', False):
+                st.info(f"Обучение завершено досрочно на эпохе {results['early_stopping_epoch']} (ранняя остановка)")
             
             col1, col2 = st.columns(2)
             
@@ -315,55 +378,156 @@ def main():
         
         # Проверяем наличие необходимых ключей для построения графика
         if all(key in results for key in ['original_series', 'train_predictions', 'test_predictions']):
-            # Создаем график с результатами
+            # Создаем график с результатами (plotly для Streamlit)
             fig = plot_train_test_results(
                 original_series=results['original_series'],
                 train_pred=results['train_predictions'],
                 test_pred=results['test_predictions'],
                 title="Результаты прогнозирования LSTM"
             )
-            
-            # Добавляем прогноз на будущее, если он есть
-            if results.get('future_predictions') is not None:
-                fig.add_trace(go.Scatter(
-                    x=results['future_predictions'].index,
-                    y=results['future_predictions'].values,
-                    mode='lines+markers',
-                    name='Прогноз (будущее)',
-                    line=dict(color='purple'),
-                    marker=dict(size=6)
-                ))
-            
-            # Настройка макета графика
             fig.update_layout(
                 height=500
             )
-            
             st.plotly_chart(fig, use_container_width=True)
+            # --- Секция: СКАЧАТЬ ОТЧЕТ ---
+            # График прогноза (matplotlib -> base64)
+            forecast_fig = plot_train_test_results_matplotlib(
+                results['original_series'],
+                results['train_predictions'],
+                results['test_predictions'],
+                title="Результаты прогнозирования LSTM"
+            )
+            forecast_img_base64 = reporting.save_plot_to_base64(forecast_fig, backend='matplotlib')
+            # График потерь (matplotlib -> base64)
+            if 'history' in results:
+                loss_fig = plot_training_history(results['history'])
+                loss_img_base64 = reporting.save_plot_to_base64(loss_fig, backend='matplotlib')
+            else:
+                loss_img_base64 = ''
+            # Описание и параметры
+            description = "Прогнозирование временного ряда с помощью LSTM."
+            params = {
+                'Размер обучающей выборки': train_size,
+                'Длина входной последовательности': sequence_length,
+                'Сложность модели': model_complexity,
+                'Количество эпох': epochs,
+                'Шаги прогноза вперед': forecast_steps
+            }
+            md_report = reporting.generate_markdown_report(
+                title="Отчет по эксперименту LSTM",
+                description=description,
+                metrics_train=results['train_metrics'],
+                metrics_test=results['test_metrics'],
+                train_time=results.get('train_time', 0),
+                forecast_img_base64=forecast_img_base64,
+                loss_img_base64=loss_img_base64,
+                params=params,
+                early_stopping=results.get('early_stopping', False),
+                early_stopping_epoch=results.get('early_stopping_epoch')
+            )
+            # Генерируем PDF (если возможно)
+            try:
+                pdf_bytes = reporting.markdown_to_pdf(md_report)
+            except Exception as e:
+                pdf_bytes = None
+                st.warning(f"Не удалось сгенерировать PDF: {e}")
+            reporting.download_report_buttons(md_report, pdf_bytes, md_filename="lstm_report.md", pdf_filename="lstm_report.pdf")
+            # --- Конец секции отчета ---
         else:
             st.warning("Не удалось отобразить график прогнозирования из-за отсутствия необходимых данных.")
         
-        # Показываем таблицу с прогнозами на будущее, если есть
-        if results.get('future_predictions') is not None and forecast_steps > 0:
-            st.subheader("Прогноз на будущие периоды")
-            future_df = pd.DataFrame({
-                'Прогнозируемое значение': results['future_predictions']
-            })
-            st.dataframe(future_df)
-            
-            # Добавляем возможность скачать прогноз
-            csv = future_df.to_csv(index=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            st.download_button(
-                label="Скачать прогноз (CSV)",
-                data=csv,
-                file_name=f"lstm_forecast_{timestamp}.csv",
-                mime="text/csv"
-            )
+        # СЕКЦИЯ: Прогноз в будущее по уже обученной модели
+        if st.session_state.lstm_model is not None:
+            st.subheader("Прогноз на будущее по обученной модели")
+            forecast_steps = st.number_input(
+                "Шаги прогноза вперед", min_value=1, max_value=100, value=10, step=1, key="future_steps")
+            if st.button("Сделать прогноз в будущее"):
+                try:
+                    future_preds = st.session_state.lstm_model.forecast(steps=int(forecast_steps))
+                    # Создаём индекс для будущих дат
+                    future_index = create_future_index(results['original_series'].index, int(forecast_steps))
+                    future_preds = pd.Series(future_preds.values, index=future_index)
+                    # График прогноза
+                    st.plotly_chart(plot_forecast(results['original_series'], future_preds, title="Прогноз на будущее (LSTM)"), use_container_width=True)
+                    # Таблица прогноза
+                    st.dataframe(pd.DataFrame({'Прогнозируемое значение': future_preds}))
+                    # Кнопка для скачивания
+                    csv = future_preds.to_csv(index=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    st.download_button(
+                        label="Скачать прогноз (CSV)",
+                        data=csv,
+                        file_name=f"lstm_forecast_{timestamp}.csv",
+                        mime="text/csv"
+                    )
+                except Exception as e:
+                    st.error(f"Ошибка при прогнозе в будущее: {str(e)}")
     # Если модель еще не обучена, покажем инструкции
     else:
         st.info("Выберите режим настройки и нажмите 'Запустить обучение' для начала анализа.")
 
+    # СЕКЦИЯ: Эксперимент с тройным разбиением
+    if st.session_state.lstm_model is not None and st.session_state.lstm_results is not None:
+        st.subheader("Эксперимент: тройное разбиение (train/val/future)")
+        if st.button("Запустить эксперимент тройного разбиения"):
+            try:
+                ts_series = st.session_state.lstm_results['original_series']
+                n = len(ts_series)
+                part = n // 3
+                train = ts_series.iloc[:part]
+                val = ts_series.iloc[part:2*part]
+                future = ts_series.iloc[2*part:]
+                # Обучаем новую модель только на train
+                exp_model = LSTMModel(
+                    sequence_length=st.session_state.lstm_model.sequence_length,
+                    units=st.session_state.lstm_model.units,
+                    dropout_rate=st.session_state.lstm_model.dropout_rate,
+                    bidirectional=st.session_state.lstm_model.bidirectional
+                )
+                exp_model.fit(
+                    series=train,
+                    epochs=st.session_state.lstm_model.training_history and len(st.session_state.lstm_model.training_history['loss']) or 50,
+                    batch_size=16,
+                    validation_split=0.1,
+                    early_stopping=True,
+                    patience=10,
+                    verbose=0,
+                    train_size=1.0
+                )
+                # Прогноз на валидации (val)
+                val_data = pd.concat([train[-exp_model.sequence_length:], val])
+                # Приведение к Series, если DataFrame
+                if isinstance(val_data, pd.DataFrame):
+                    val_data = val_data.iloc[:, 0]
+                if len(val_data) <= exp_model.sequence_length:
+                    st.error("Слишком короткая валидационная часть для формирования хотя бы одного окна. Увеличьте длину ряда или уменьшите sequence_length.")
+                    return
+                prep = prepare_data_for_forecast(val_data, exp_model.sequence_length)
+                X_val, y_val = prep['X'], prep['y']
+                if len(X_val) == 0:
+                    st.error("Не удалось сформировать ни одного окна для валидации. Попробуйте уменьшить sequence_length или увеличить размер данных.")
+                    return
+                val_pred = exp_model.model.predict(X_val, verbose=0)
+                val_pred = exp_model.scaler.inverse_transform(val_pred).flatten()
+                y_val = exp_model.scaler.inverse_transform(y_val.reshape(-1, 1)).flatten()
+                # Прогноз в будущее (на длину future)
+                future_pred = exp_model.forecast(steps=len(future))
+                # Метрики
+                val_metrics = calculate_metrics(y_val, val_pred)
+                future_metrics = calculate_metrics(future.values, future_pred)
+                st.markdown("**Метрики на валидации (2-я часть):**")
+                st.json(val_metrics)
+                st.markdown("**Метрики на будущем (3-я часть):**")
+                st.json(future_metrics)
+                # График
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=ts_series.index, y=ts_series.values, mode='lines', name='Исходные данные'))
+                fig.add_trace(go.Scatter(x=val.index[-len(val_pred):], y=val_pred, mode='lines', name='Прогноз (валидация)', line=dict(dash='dot', color='orange')))
+                fig.add_trace(go.Scatter(x=future.index, y=future_pred, mode='lines', name='Прогноз (будущее)', line=dict(dash='dot', color='green')))
+                fig.update_layout(title='Эксперимент: тройное разбиение', xaxis_title='Время', yaxis_title='Значение', height=500)
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Ошибка в эксперименте тройного разбиения: {str(e)}")
 
 if __name__ == "__main__":
     main()
