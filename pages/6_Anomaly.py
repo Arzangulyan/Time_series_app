@@ -13,7 +13,9 @@ from modules.anomaly_module import (
     z_score_detection,
     iqr_detection,
     hampel_filter,
-    detect_plateau
+    detect_plateau,
+    evaluate_anomaly_detection,  # Импортируем новую функцию
+    create_true_anomaly_mask  # Добавляем импорт этой функции для визуализации
 )
 
 # Инициализация состояния сессии
@@ -356,20 +358,23 @@ def detect_all_anomalies(data):
     # Z-Score
     if use_zscore:
         z_outliers = z_score_detection(data, z_threshold)
-        results['z_outliers'] = z_outliers
+        # Убедимся, что результат - именно numpy array
+        results['z_outliers'] = np.asarray(z_outliers)
     
     # Hampel - обновляем вызов с новыми параметрами
     if use_hampel:
-        results['hampel_outliers'] = hampel_filter(data, 
-                                                  window=hampel_window, 
-                                                  sigma=hampel_sigma,
-                                                  adaptive_window=hampel_adaptive,
-                                                  window_percent=hampel_window_percent)
+        hampel_result = hampel_filter(data, 
+                                    window=hampel_window, 
+                                    sigma=hampel_sigma,
+                                    adaptive_window=hampel_adaptive,
+                                    window_percent=hampel_window_percent)
+        results['hampel_outliers'] = np.asarray(hampel_result)
     
     # IQR
     if use_iqr:
         iqr_outliers, iqr_bounds = iqr_detection(data, iqr_multiplier)
-        results['iqr_outliers'] = iqr_outliers
+        # Убедимся, что результат - именно numpy array
+        results['iqr_outliers'] = np.asarray(iqr_outliers)
         results['iqr_bounds'] = iqr_bounds
     
     # Plateau
@@ -512,6 +517,297 @@ if use_plateau:
 cols = st.columns(len(stats))
 for i, (name, value) in enumerate(stats):
     cols[i].metric(name, value)
+
+# ====================
+# ОЦЕНКА КАЧЕСТВА ОБНАРУЖЕНИЯ АНОМАЛИЙ
+# ====================
+# Проверка наличия внедренных аномалий
+has_injected_anomalies = (any(st.session_state.anomalies.values()) 
+                          and (data_source == "Синтетические данные" or 
+                              (data_source == "Загруженные данные" and "original" in df.columns)))
+
+st.subheader("Оценка качества обнаружения аномалий")
+
+if has_injected_anomalies:
+    # Если есть внедренные аномалии, включаем опцию оценки
+    enable_evaluation = st.checkbox("Включить оценку качества обнаружения", value=True,
+                                   help="Вычисляет метрики Precision, Recall и F1-score для каждого метода")
+    
+    if enable_evaluation:
+        # Получаем информацию о внедренных аномалиях
+        if data_source == "Синтетические данные":
+            # Для синтетических данных используем metadata
+            injected_anomalies = metadata
+        else:
+            # Для реальных данных берем данные из ранее сохраненных метаданных
+            injected_anomalies = metadata
+        
+        # Удаляем не-маски из словаря аномалий перед оценкой
+        anomalies_for_evaluation = {}
+        for method_name, detection_result in anomalies.items():
+            # Пропускаем iqr_bounds и другие не-маски
+            if method_name == 'iqr_bounds':
+                continue
+                
+            # Преобразуем pandas Series/DataFrame в numpy array если нужно
+            if isinstance(detection_result, (pd.Series, pd.DataFrame)):
+                detection_result = detection_result.values
+                
+            # Проверяем, что результат имеет правильный формат
+            if isinstance(detection_result, np.ndarray) and detection_result.shape == (len(df),):
+                if detection_result.dtype == bool:
+                    anomalies_for_evaluation[method_name] = detection_result
+                elif np.issubdtype(detection_result.dtype, np.number):
+                    # Преобразуем к булевому типу, если это числовой массив
+                    anomalies_for_evaluation[method_name] = detection_result.astype(bool)
+        
+        # Для отладки: показать, какие методы включены в оценку
+        with st.expander("Отладочная информация"):
+            st.write("### Методы, включенные в оценку:")
+            for method in anomalies_for_evaluation.keys():
+                st.write(f"✅ {method_names.get(method, method)}")
+                
+            st.write("### Методы, исключенные из оценки:")
+            excluded_methods = set(anomalies.keys()) - set(anomalies_for_evaluation.keys()) - {'iqr_bounds'}
+            for method in excluded_methods:
+                st.write(f"❌ {method_names.get(method, method)}")
+                if method in anomalies:
+                    st.write(f"   Причина: тип={type(anomalies[method])}, форма={getattr(anomalies[method], 'shape', 'Нет атрибута shape')}")
+        
+        # Вычисляем метрики для каждого метода
+        try:
+            # Создаем истинную маску аномалий для визуализации
+            true_anomaly_mask = create_true_anomaly_mask(injected_anomalies, len(df))
+            
+            # Вычисляем метрики
+            metrics_results = evaluate_anomaly_detection(injected_anomalies, anomalies_for_evaluation, len(df))
+            
+            # Визуализация метрик
+            if metrics_results:
+                # Создаем DataFrame для удобного отображения
+                metrics_df = pd.DataFrame(columns=["Метод", "Precision", "Recall", "F1-Score"])
+                
+                # Заполняем данными
+                for method, metrics in metrics_results.items():
+                    # Получаем русское название метода
+                    method_name = method_names.get(method, method)
+                    
+                    # Форматируем значения метрик
+                    precision = f"{metrics['precision']:.3f}"
+                    recall = f"{metrics['recall']:.3f}"
+                    f1 = f"{metrics['f1']:.3f}"
+                    
+                    # Добавляем в DataFrame
+                    new_row = pd.DataFrame({
+                        "Метод": [method_name],
+                        "Precision": [precision],
+                        "Recall": [recall],
+                        "F1-Score": [f1]
+                    })
+                    metrics_df = pd.concat([metrics_df, new_row], ignore_index=True)
+                
+                # Отображаем таблицу с метриками
+                st.write("### Метрики для методов обнаружения аномалий:")
+                st.dataframe(metrics_df, use_container_width=True)
+                
+                # Создаем вкладки для разных типов визуализации
+                tab1, tab2 = st.tabs(["📊 Сравнение метрик", "🔍 Визуализация детекций"])
+                
+                with tab1:
+                    # Визуализация метрик с помощью графиков
+                    fig_metrics = go.Figure()
+                    
+                    # Добавляем бары для каждой метрики
+                    for idx, metric in enumerate(["precision", "recall", "f1"]):
+                        y_values = [metrics[metric] for method, metrics in metrics_results.items()]
+                        method_labels = [method_names.get(method, method) for method in metrics_results.keys()]
+                        
+                        fig_metrics.add_trace(go.Bar(
+                            x=method_labels,
+                            y=y_values,
+                            name=metric.capitalize(),
+                            text=[f"{val:.3f}" for val in y_values],
+                            textposition='auto'
+                        ))
+                    
+                    fig_metrics.update_layout(
+                        title="Сравнение методов обнаружения аномалий",
+                        xaxis_title="Метод",
+                        yaxis_title="Значение метрики",
+                        barmode='group',
+                        height=400,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    
+                    st.plotly_chart(fig_metrics, use_container_width=True)
+                    
+                    # Таблица с описанием метрик
+                    st.markdown("""
+                    ### Пояснение метрик обнаружения аномалий
+                    
+                    | Метрика | Описание | Формула | Интерпретация |
+                    |---------|---------|---------|---------------|
+                    | **Precision** (Точность) | Доля правильно обнаруженных аномалий среди всех обнаруженных точек | TP / (TP + FP) | Высокое значение означает низкий уровень ложных срабатываний |
+                    | **Recall** (Полнота) | Доля правильно обнаруженных аномалий среди всех фактических аномалий | TP / (TP + FN) | Высокое значение означает, что метод обнаруживает большинство аномалий |
+                    | **F1-Score** | Гармоническое среднее точности и полноты | 2 × (Precision × Recall) / (Precision + Recall) | Сбалансированная метрика для методов с компромиссом между точностью и полнотой |
+                    
+                    где:
+                    - **TP** (True Positive) — верно обнаруженные аномалии
+                    - **FP** (False Positive) — нормальные точки, ошибочно отмеченные как аномалии
+                    - **FN** (False Negative) — пропущенные аномалии
+                    """)
+                
+                with tab2:
+                    # Интерактивная визуализация детекций
+                    st.write("### Визуализация качества обнаружения аномалий")
+                    selected_method = st.selectbox(
+                        "Выберите метод для отображения:",
+                        options=list(metrics_results.keys()),
+                        format_func=lambda x: method_names.get(x, x)
+                    )
+                    
+                    if selected_method:
+                        # Строим визуализацию TP, FP, FN для выбранного метода
+                        detection_mask = anomalies_for_evaluation[selected_method]
+                        
+                        # Вычисляем TP, FP, FN
+                        tp_mask = true_anomaly_mask & detection_mask
+                        fp_mask = (~true_anomaly_mask) & detection_mask
+                        fn_mask = true_anomaly_mask & (~detection_mask)
+                        
+                        # Строим график
+                        fig_detection = go.Figure()
+                        
+                        # Добавляем исходный ряд
+                        fig_detection.add_trace(go.Scatter(
+                            x=df['time'],
+                            y=df['data'],
+                            mode='lines',
+                            name='Временной ряд',
+                            line=dict(color='lightgray', width=1.5),
+                            opacity=0.7
+                        ))
+                        
+                        # Добавляем истинные аномалии (обозначение на фоне)
+                        if np.any(true_anomaly_mask):
+                            idx = np.where(true_anomaly_mask)[0]
+                            true_x = df.iloc[idx]['time']
+                            # Создаем зоны истинных аномалий
+                            for i in range(len(true_x)):
+                                fig_detection.add_vrect(
+                                    x0=true_x.iloc[i] - 0.1,
+                                    x1=true_x.iloc[i] + 0.1,
+                                    fillcolor="rgba(220, 220, 220, 0.3)",
+                                    layer="below",
+                                    line_width=0
+                                )
+                        
+                        # True Positives (верно обнаруженные)
+                        if np.any(tp_mask):
+                            idx = np.where(tp_mask)[0]
+                            fig_detection.add_trace(go.Scatter(
+                                x=df.iloc[idx]['time'],
+                                y=df.iloc[idx]['data'],
+                                mode='markers',
+                                name='Верно обнаруженные (TP)',
+                                marker=dict(
+                                    color='green',
+                                    size=10,
+                                    symbol='circle',
+                                    line=dict(width=2, color='white')
+                                )
+                            ))
+                        
+                        # False Positives (ложные срабатывания)
+                        if np.any(fp_mask):
+                            idx = np.where(fp_mask)[0]
+                            fig_detection.add_trace(go.Scatter(
+                                x=df.iloc[idx]['time'],
+                                y=df.iloc[idx]['data'],
+                                mode='markers',
+                                name='Ложные срабатывания (FP)',
+                                marker=dict(
+                                    color='red',
+                                    size=10,
+                                    symbol='x',
+                                    line=dict(width=2, color='white')
+                                )
+                            ))
+                        
+                        # False Negatives (пропущенные аномалии)
+                        if np.any(fn_mask):
+                            idx = np.where(fn_mask)[0]
+                            fig_detection.add_trace(go.Scatter(
+                                x=df.iloc[idx]['time'],
+                                y=df.iloc[idx]['data'],
+                                mode='markers',
+                                name='Пропущенные аномалии (FN)',
+                                marker=dict(
+                                    color='orange',
+                                    size=10,
+                                    symbol='triangle-down',
+                                    line=dict(width=2, color='white')
+                                )
+                            ))
+                        
+                        # Настраиваем внешний вид графика
+                        fig_detection.update_layout(
+                            title=f"Качество обнаружения аномалий: {method_names.get(selected_method, selected_method)}",
+                            xaxis_title="Время",
+                            yaxis_title="Значение",
+                            legend=dict(
+                                orientation="h",
+                                yanchor="bottom",
+                                y=1.02,
+                                xanchor="right",
+                                x=1
+                            ),
+                            height=500,
+                            hovermode='closest'
+                        )
+                        
+                        st.plotly_chart(fig_detection, use_container_width=True)
+                        
+                        # Показываем статистику для этого метода
+                        metrics = metrics_results[selected_method]
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("True Positives", np.sum(tp_mask))
+                        col2.metric("False Positives", np.sum(fp_mask))
+                        col3.metric("False Negatives", np.sum(fn_mask))
+                        col4.metric("Precision/Recall", f"{metrics['precision']:.3f} / {metrics['recall']:.3f}")
+                        
+                        # Добавляем интерпретацию результатов
+                        st.info(f"""
+                        **Интерпретация результатов для метода {method_names.get(selected_method, selected_method)}:**
+                        
+                        - **Precision = {metrics['precision']:.3f}**: метод верно определяет {metrics['precision']*100:.1f}% случаев из всех обнаруженных аномалий.
+                        - **Recall = {metrics['recall']:.3f}**: метод обнаруживает {metrics['recall']*100:.1f}% от всех фактических аномалий.
+                        - **F1-Score = {metrics['f1']:.3f}**: сбалансированная оценка эффективности метода.
+                        
+                        {'Высокая точность, но низкая полнота: метод редко ошибается, но пропускает много аномалий.' 
+                        if metrics['precision'] > 0.8 and metrics['recall'] < 0.5 else
+                        'Высокая полнота, но низкая точность: метод находит большинство аномалий, но часто даёт ложные срабатывания.'
+                        if metrics['recall'] > 0.8 and metrics['precision'] < 0.5 else
+                        'Хороший баланс точности и полноты: метод эффективен для обнаружения аномалий.'
+                        if metrics['precision'] > 0.7 and metrics['recall'] > 0.7 else
+                        'Низкие показатели: требуется настройка параметров метода.'}
+                        """)
+            else:
+                st.info("Ни один из методов обнаружения не дал результатов для оценки.")
+        except Exception as e:
+            st.error(f"Ошибка при оценке качества обнаружения: {str(e)}")
+            st.error("Подробности: " + "\n".join(str(e).split("\n")[:5]))
+            
+            # Показываем дополнительную отладочную информацию
+            with st.expander("Дополнительная отладочная информация"):
+                st.write("### Состояние переменных:")
+                st.write(f"Размерность DataFrame: {df.shape}")
+                st.write(f"Количество инъецированных аномалий: {len(injected_anomalies)}")
+                st.write(f"Методы для оценки: {list(anomalies_for_evaluation.keys())}")
+                for method, arr in anomalies_for_evaluation.items():
+                    st.write(f"{method}: тип={type(arr)}, форма={arr.shape}, dtype={arr.dtype}")
+else:
+    st.info("Для оценки качества обнаружения добавьте аномалии в данные.")
 
 # ====================
 # ЭКСПОРТ ДАННЫХ

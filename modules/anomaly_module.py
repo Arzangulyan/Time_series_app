@@ -220,10 +220,17 @@ def z_score_detection(data: np.ndarray, threshold: float = 3.0) -> np.ndarray:
     Returns:
         Булев массив с отметками аномалий.
     """
+    # Конвертируем вход в NumPy массив, если это DataFrame или Series
+    if isinstance(data, (pd.DataFrame, pd.Series)):
+        data = data.values
+        
     mean = np.nanmean(data)
     std = np.nanstd(data)
     z_scores = np.abs((data - mean) / std)
-    return z_scores > threshold
+    
+    # Убедимся, что возвращаем именно NumPy массив
+    result = z_scores > threshold
+    return np.asarray(result)
 
 
 @st.cache_data
@@ -238,12 +245,19 @@ def iqr_detection(data: np.ndarray, multiplier: float = 1.5) -> Tuple[np.ndarray
     Returns:
         Кортеж из булева массива с отметками аномалий и кортежа с нижней и верхней границами.
     """
+    # Конвертируем вход в NumPy массив, если это DataFrame или Series
+    if isinstance(data, (pd.DataFrame, pd.Series)):
+        data = data.values
+        
     q1 = np.nanpercentile(data, 25)
     q3 = np.nanpercentile(data, 75)
     iqr = q3 - q1
     lower_bound = q1 - multiplier * iqr
     upper_bound = q3 + multiplier * iqr
-    return (data < lower_bound) | (data > upper_bound), (lower_bound, upper_bound)
+    
+    # Убедимся, что возвращаем именно NumPy массив
+    result = (data < lower_bound) | (data > upper_bound)
+    return np.asarray(result), (lower_bound, upper_bound)
 
 
 @st.cache_data
@@ -262,6 +276,10 @@ def hampel_filter(data: np.ndarray, window: int = 5, sigma: float = 3.0,
     Returns:
         Булев массив с отметками аномалий.
     """
+    # Конвертируем вход в NumPy массив, если это DataFrame или Series
+    if isinstance(data, (pd.DataFrame, pd.Series)):
+        data = data.values
+        
     n = len(data)
     result = np.zeros(n, dtype=bool)
     
@@ -418,3 +436,136 @@ def add_anomalies_to_existing_data(
             })
     
     return data_with_anomalies, anomaly_info
+
+
+@st.cache_data
+def create_true_anomaly_mask(anomaly_info: List[Dict[str, Any]], length: int) -> np.ndarray:
+    """
+    Создает бинарную маску для истинных аномалий на основе информации о внедренных аномалиях.
+    
+    Args:
+        anomaly_info: Список словарей с информацией о внедренных аномалиях.
+        length: Длина временного ряда.
+        
+    Returns:
+        Бинарный массив, где True указывает на аномалию.
+    """
+    true_mask = np.zeros(length, dtype=bool)
+    
+    for anomaly in anomaly_info:
+        anom_type = anomaly.get('type')
+        
+        if anom_type == 'point':
+            idx = anomaly.get('index')
+            if 0 <= idx < length:
+                true_mask[idx] = True
+                
+        elif anom_type in ['extended', 'sensor_fault']:
+            start_idx = anomaly.get('start_idx', 0)
+            duration = anomaly.get('duration', 0)
+            end_idx = min(start_idx + duration, length)
+            if start_idx < length:
+                true_mask[start_idx:end_idx] = True
+    
+    return true_mask
+
+
+@st.cache_data
+def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+    """
+    Вычисляет метрики качества обнаружения аномалий.
+    
+    Args:
+        y_true: Истинные метки аномалий (бинарный массив).
+        y_pred: Предсказанные метки аномалий (бинарный массив).
+        
+    Returns:
+        Словарь с метриками precision, recall и f1-score.
+    """
+    # Проверка на пустые массивы
+    if np.sum(y_true) == 0 and np.sum(y_pred) == 0:
+        return {'precision': 1.0, 'recall': 1.0, 'f1': 1.0}
+    if np.sum(y_true) == 0:
+        return {'precision': 0.0, 'recall': 1.0, 'f1': 0.0}
+    if np.sum(y_pred) == 0:
+        return {'precision': 0.0, 'recall': 0.0, 'f1': 0.0}
+    
+    # Вычисление метрик
+    true_positives = np.sum(np.logical_and(y_true, y_pred))
+    false_positives = np.sum(np.logical_and(~y_true, y_pred))
+    false_negatives = np.sum(np.logical_and(y_true, ~y_pred))
+    
+    precision = true_positives / (true_positives + false_positives)
+    recall = true_positives / (true_positives + false_negatives)
+    
+    # F1-score - гармоническое среднее precision и recall
+    if precision + recall == 0:
+        f1 = 0
+    else:
+        f1 = 2 * (precision * recall) / (precision + recall)
+    
+    return {'precision': precision, 'recall': recall, 'f1': f1}
+
+
+@st.cache_data
+def evaluate_anomaly_detection(
+    anomaly_info: List[Dict[str, Any]], 
+    detected_anomalies: Dict[str, Union[np.ndarray, pd.Series]], 
+    length: int
+) -> Dict[str, Dict[str, float]]:
+    """
+    Оценивает качество обнаружения аномалий различными методами.
+    
+    Args:
+        anomaly_info: Список словарей с информацией о внедренных аномалиях.
+        detected_anomalies: Словарь с результатами различных методов обнаружения.
+        length: Длина временного ряда.
+        
+    Returns:
+        Словарь с метриками качества для каждого метода обнаружения.
+    """
+    true_mask = create_true_anomaly_mask(anomaly_info, length)
+    
+    results = {}
+    for method_name, anomaly_mask in detected_anomalies.items():
+        # Проверяем, является ли значение булевым массивом нужной длины
+        if method_name == 'iqr_bounds':
+            # Пропускаем iqr_bounds, так как это кортеж с границами, а не маска аномалий
+            continue
+            
+        # Преобразуем pandas Series/DataFrame в numpy array если нужно
+        if isinstance(anomaly_mask, (pd.Series, pd.DataFrame)):
+            anomaly_mask = anomaly_mask.values
+            
+        # Убедимся, что это ndarray с правильной формой
+        if not isinstance(anomaly_mask, np.ndarray):
+            print(f"Пропускаю {method_name}: не numpy массив (тип: {type(anomaly_mask)})")
+            continue
+            
+        if len(anomaly_mask) != length:
+            print(f"Пропускаю {method_name}: неверная длина ({len(anomaly_mask)} вместо {length})")
+            continue
+            
+        # Тип должен быть bool или конвертируемым в bool
+        try:
+            if anomaly_mask.dtype != bool:
+                # Если массив не булевый, но это одномерный числовой массив,
+                # конвертируем в булевый тип
+                if anomaly_mask.ndim == 1 and np.issubdtype(anomaly_mask.dtype, np.number):
+                    anomaly_mask = anomaly_mask.astype(bool)
+                else:
+                    print(f"Пропускаю {method_name}: не булев тип и не числовой (dtype: {anomaly_mask.dtype})")
+                    continue
+        except Exception as e:
+            print(f"Ошибка преобразования типа для {method_name}: {str(e)}")
+            continue
+        
+        try:
+            # Вычисляем метрики
+            metrics = calculate_metrics(true_mask, anomaly_mask)
+            results[method_name] = metrics
+        except Exception as e:
+            print(f"Ошибка при вычислении метрик для метода {method_name}: {str(e)}")
+            continue
+    
+    return results
