@@ -569,3 +569,77 @@ def evaluate_anomaly_detection(
             continue
     
     return results
+
+
+@st.cache_data
+def suggest_parameters(data: np.ndarray) -> Dict[str, float]:
+    """
+    Предлагает оптимальные параметры для обнаружения аномалий на основе характеристик ряда.
+    
+    Args:
+        data: Исходный ряд данных.
+        
+    Returns:
+        Словарь с рекомендуемыми параметрами для разных методов.
+    """
+    # Конвертируем вход в NumPy массив, если это DataFrame или Series
+    if isinstance(data, (pd.DataFrame, pd.Series)):
+        data = data.values
+    
+    # Очищаем данные от NaN для расчета статистик
+    clean_data = data[~np.isnan(data)]
+    n = len(clean_data)
+    
+    # Базовые статистики
+    mean = np.mean(clean_data)
+    std = np.std(clean_data)
+    median = np.median(clean_data)
+    q1 = np.percentile(clean_data, 25)
+    q3 = np.percentile(clean_data, 75)
+    iqr_value = q3 - q1
+    
+    # Оценка коэффициента вариации
+    cv = std / abs(mean) if mean != 0 else float('inf')
+    
+    # Оценка асимметрии распределения
+    skewness = np.sum((clean_data - mean) ** 3) / (n * std ** 3) if std > 0 else 0
+    
+    # Оценка "тяжелохвостости" распределения
+    kurtosis = np.sum((clean_data - mean) ** 4) / (n * std ** 4) - 3 if std > 0 else 0
+    
+    # Рекомендации по параметрам
+    suggested_params = {}
+    
+    # Z-Score порог
+    if kurtosis > 3:  # Тяжелые хвосты
+        suggested_params['z_threshold'] = max(3.5, min(5.0, 3.0 + kurtosis / 5))
+    else:  # Нормальное или легче нормального
+        suggested_params['z_threshold'] = max(2.0, min(3.5, 3.0 - kurtosis / 10))
+    
+    # IQR множитель
+    if abs(skewness) > 1:  # Сильная асимметрия
+        suggested_params['iqr_multiplier'] = max(1.0, min(3.0, 1.5 + abs(skewness) / 2))
+    else:  # Близко к симметричному
+        suggested_params['iqr_multiplier'] = 1.5
+    
+    # Hampel параметры
+    # Размер окна как функция от длины ряда и изменчивости
+    suggested_window_percent = max(0.2, min(2.0, 0.5 * (1 + cv)))
+    suggested_params['hampel_window_percent'] = suggested_window_percent
+    
+    # Размер окна в точках
+    suggested_window = max(5, min(n // 10, int(n * suggested_window_percent / 100)))
+    suggested_params['hampel_window'] = suggested_window
+    
+    # Коэффициент чувствительности
+    suggested_params['hampel_sigma'] = max(2.0, min(4.0, 3.0 + kurtosis / 10))
+    
+    # Plateau параметры
+    # Порог как функция от стандартного отклонения
+    noise_estimate = min(std, iqr_value / 1.35)  # Робастная оценка шума
+    suggested_params['plateau_threshold'] = max(0.0001, min(0.01, noise_estimate / 100))
+    
+    # Минимальная длительность как функция от длины ряда
+    suggested_params['plateau_duration'] = max(3, min(30, n // 50))
+    
+    return suggested_params
