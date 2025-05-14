@@ -487,9 +487,18 @@ def evaluate_model_performance(model, train_data, test_data):
     from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
     import numpy as np
     
-    # Получаем прогноз на тестовый период
-    y_pred = model.predict(steps=len(test_data))
-    y_true = test_data.values if hasattr(test_data, 'values') else test_data
+    # Определяем режим работы: если test_data и train_data одинаковы, рассчитываем метрики на обучающей выборке
+    is_training_evaluation = id(test_data) == id(train_data)
+    
+    # Получаем прогноз в зависимости от режима работы
+    if is_training_evaluation:
+        # Для обучающей выборки используем fitted values
+        y_pred = model.predict_in_sample()
+        y_true = train_data.values if hasattr(train_data, 'values') else train_data
+    else:
+        # Для тестовой выборки делаем прогноз
+        y_pred = model.predict(steps=len(test_data))
+        y_true = test_data.values if hasattr(test_data, 'values') else test_data
     
     # Рассчитываем основные метрики
     mse = mean_squared_error(y_true, y_pred)
@@ -499,12 +508,22 @@ def evaluate_model_performance(model, train_data, test_data):
     # R-squared и adjusted R-squared
     r2 = r2_score(y_true, y_pred)
     n = len(y_true)
-    p = 1  # количество предикторов (для авторегрессии можно взять порядок модели)
+    
+    # Для adjusted R-squared учитываем все параметры модели
+    p = 1  # количество предикторов (минимум 1)
     if hasattr(model, 'get_params'):
         params = model.get_params()
+        # Учитываем все параметры ARIMA модели
         if 'p' in params:
-            p = max(1, params['p'])
-    adj_r2 = 1 - (1 - r2) * (n - 1) / (n - p - 1)
+            p += params['p']
+        if 'q' in params:
+            p += params['q']
+        if 'P' in params:
+            p += params['P']
+        if 'Q' in params:
+            p += params['Q']
+    
+    adj_r2 = 1 - (1 - r2) * (n - 1) / (n - p - 1) if n > p + 1 else np.nan
     
     # MAPE (Mean Absolute Percentage Error)
     # Избегаем деления на 0

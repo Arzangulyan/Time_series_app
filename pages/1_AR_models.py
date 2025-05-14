@@ -553,12 +553,27 @@ def main():
                             experiment_model = model_info['model']
                             experiment_params = experiment_model.get_params()
                             
+                            # Получаем время обучения из model_info, обеспечивая минимальное ненулевое значение
+                            # Даже самая быстрая модель должна занимать хоть какое-то время
+                            fit_time = model_info.get('fit_time', None)
+                            
+                            # Если время отсутствует или равно 0, установим минимальное значение
+                            if fit_time is None or fit_time < 0.001:
+                                logger.warning(f"Model {i+1} ({experiment_model.__class__.__name__}) has no fit_time recorded, using a default minimal value")
+                                fit_time = 0.001  # 1 миллисекунда как минимальное время
+                            
                             # Вычисляем метрики для этого эксперимента
                             try:
+                                # Засекаем дополнительное время для расчета метрик
+                                metrics_start_time = time.perf_counter()
+                                
                                 train_pred = experiment_model.predict_in_sample()
                                 test_pred = experiment_model.predict(steps=len(test))
                                 train_metrics = evaluate_model_performance(experiment_model, train, train)
                                 test_metrics = evaluate_model_performance(experiment_model, train, test)
+                                
+                                # Дополнительное время на расчет метрик и прогнозов
+                                metrics_time = time.perf_counter() - metrics_start_time
                                 
                                 # Создаем запись эксперимента
                                 experiment = {
@@ -568,11 +583,13 @@ def main():
                                     'train_metrics': train_metrics,
                                     'test_metrics': test_metrics,
                                     'info_criterion': model_info.get('criterion_value', None),
-                                    'train_time': model_info.get('fit_time', 0),
+                                    'train_time': fit_time,  # Используем fit_time из model_info или минимальное значение
+                                    'metrics_time': metrics_time,  # Сохраняем время расчета метрик отдельно
+                                    'total_time': fit_time + metrics_time,  # Общее время (обучение + метрики)
                                     'rank': i + 1  # Rank is based on the sorted order from auto_arima
                                 }
                                 st.session_state.auto_tuning_experiments.append(experiment)
-                                logger.info(f"Added experiment {i+1}: {experiment['model_info']} with {criterion_used}: {experiment['info_criterion']}")
+                                logger.info(f"Added experiment {i+1}: {experiment['model_info']} with train_time: {fit_time:.4f}s, metrics_time: {metrics_time:.4f}s")
                             except Exception as exp_e:
                                 logger.error(f"Error collecting metrics for model: {str(exp_e)}")
                                 st.warning(f"Не удалось собрать метрики для модели {experiment_model.__class__.__name__}: {str(exp_e)}")
@@ -622,18 +639,44 @@ def main():
         st.info(f"Выбор модели основан на критерии {criterion_info}. Меньшее значение = лучшая модель.")
         st.info(f"Всего протестировано моделей: {len(st.session_state.auto_tuning_experiments)}")
         
-        # Create a DataFrame for comparison
+        # Create a DataFrame for comparison with enhanced metrics
         models_data = []
         for exp in st.session_state.auto_tuning_experiments:
+            # Extract metrics for readability
+            train_metrics = exp['train_metrics']
+            test_metrics = exp['test_metrics']
+            
+            # Use total_time if available, otherwise fall back to train_time
+            display_time = exp.get('total_time', exp.get('train_time', 0))
+            
             model_data = {
                 'Модель': exp['model_info'],
                 'Ранг': exp['rank'],
                 f'{criterion_info}': exp.get('info_criterion', 'Н/Д'),
-                'RMSE (тест)': exp['test_metrics'].get('rmse', 'Н/Д'),
-                'MAE (тест)': exp['test_metrics'].get('mae', 'Н/Д'),
-                'MAPE (тест)': exp['test_metrics'].get('mape', 'Н/Д'),
-                'Theil U2 (тест)': exp['test_metrics'].get('theil_u2', 'Н/Д'),
-                'Время (сек)': exp.get('train_time', 'Н/Д')
+                
+                # Training metrics
+                'R² (обуч)': train_metrics.get('r2', 'Н/Д'),
+                'Adjusted R²': train_metrics.get('adj_r2', 'Н/Д'),
+                'MSE': train_metrics.get('mse', 'Н/Д'),
+                'RMSE': train_metrics.get('rmse', 'Н/Д'),
+                'MAE': train_metrics.get('mae', 'Н/Д'),
+                'MAPE': train_metrics.get('mape', 'Н/Д'),
+                'SMAPE': train_metrics.get('smape', 'Н/Д'),
+                'MASE': train_metrics.get('mase', 'Н/Д'),
+                'Theil U2': train_metrics.get('theil_u2', 'Н/Д'),
+                
+                # Test metrics
+                'R² (тест)': test_metrics.get('r2', 'Н/Д'),
+                'Adjusted R² (тест)': test_metrics.get('adj_r2', 'Н/Д'),
+                'MSE (тест)': test_metrics.get('mse', 'Н/Д'),
+                'RMSE (тест)': test_metrics.get('rmse', 'Н/Д'),
+                'MAE (тест)': test_metrics.get('mae', 'Н/Д'),
+                'MAPE (тест)': test_metrics.get('mape', 'Н/Д'),
+                'SMAPE (тест)': test_metrics.get('smape', 'Н/Д'),
+                'MASE (тест)': test_metrics.get('mase', 'Н/Д'),
+                'Theil U2 (тест)': test_metrics.get('theil_u2', 'Н/Д'),
+                
+                'Время (сек)': display_time
             }
             models_data.append(model_data)
             logger.info(f"Added model to comparison table: {model_data['Модель']} with {criterion_info}: {model_data[f'{criterion_info}']}")
@@ -648,8 +691,41 @@ def main():
         
         logger.info(f"Created comparison DataFrame with {len(models_df)} rows, sorted by {criterion_info}")
         
-        # Display the comparison table
-        st.dataframe(models_df, use_container_width=True)
+        # Add filter options for the table
+        st.subheader("Таблица сравнения моделей")
+        
+        # Create metric display options
+        col1, col2 = st.columns(2)
+        with col1:
+            show_train_metrics = st.checkbox("Показать метрики обучающей выборки", value=True)
+        with col2:
+            show_test_metrics = st.checkbox("Показать метрики тестовой выборки", value=True)
+        
+        # Filter columns based on user selection
+        display_columns = ['Модель', 'Ранг', f'{criterion_info}']
+        
+        if show_train_metrics:
+            train_metric_cols = [col for col in models_df.columns if '(обуч)' in col]
+            display_columns.extend(train_metric_cols)
+        
+        if show_test_metrics:
+            test_metric_cols = [col for col in models_df.columns if '(тест)' in col]
+            display_columns.extend(test_metric_cols)
+        
+        display_columns.append('Время (сек)')
+        
+        # Display the filtered comparison table
+        st.dataframe(models_df[display_columns], use_container_width=True)
+        
+        # Allow user to download the complete comparison table
+        csv = models_df.to_csv(index=False)
+        st.download_button(
+            label="Скачать полную таблицу сравнения (CSV)",
+            data=csv,
+            file_name=f"arima_models_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+        
         logger.info("Displayed comparison table")
         
         # Detailed view of experiments with tabs - but use the sorted order
@@ -775,39 +851,84 @@ def main():
                     consolidated_md += f"Дата и время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                     consolidated_md += "## Сравнение моделей\n\n"
                     
-                    # Add comparison table
-                    table_md = "| Ранг | Модель | RMSE (тест) | MAE (тест) | MAPE (тест) | Theil's U2 |\n"
-                    table_md += "|------|--------|------------|------------|-------------|------------|\n"
+                    # Enhanced comparison table with more metrics
+                    table_md = "| Ранг | Модель | " + criterion_info + " | R² (тест) | Adj R² (тест) | RMSE (тест) | MAE (тест) | MAPE (тест) | SMAPE (тест) | MASE (тест) | Theil U2 (тест) |\n"
+                    table_md += "|------|--------|" + "-" * len(criterion_info) + "|----------|-------------|------------|------------|-------------|--------------|------------|----------------|\n"
                     
-                    for exp in st.session_state.auto_tuning_experiments:
+                    # Sort experiments by rank for the table
+                    sorted_experiments = sorted(st.session_state.auto_tuning_experiments, key=lambda x: x['rank'])
+                    
+                    for exp in sorted_experiments:
                         metrics = exp['test_metrics']
-                        table_md += f"| {exp['rank']} | {exp['model_info']} | {metrics.get('rmse', 'Н/Д'):.4f} | "
-                        table_md += f"{metrics.get('mae', 'Н/Д'):.4f} | {metrics.get('mape', 'Н/Д'):.4f} | "
-                        table_md += f"{metrics.get('theil_u2', 'Н/Д'):.4f} |\n"
+                        criterion_val = exp.get('info_criterion', 'Н/Д')
+                        
+                        # Format values correctly by evaluating conditional expressions outside the f-string
+                        formatted_criterion = f"{criterion_val:.4f}" if isinstance(criterion_val, (int, float)) else str(criterion_val)
+                        formatted_r2 = f"{metrics.get('r2', 'Н/Д'):.4f}" if isinstance(metrics.get('r2', 'Н/Д'), (int, float)) else str(metrics.get('r2', 'Н/Д'))
+                        formatted_adj_r2 = f"{metrics.get('adj_r2', 'Н/Д'):.4f}" if isinstance(metrics.get('adj_r2', 'Н/Д'), (int, float)) else str(metrics.get('adj_r2', 'Н/Д'))
+                        formatted_rmse = f"{metrics.get('rmse', 'Н/Д'):.4f}" if isinstance(metrics.get('rmse', 'Н/Д'), (int, float)) else str(metrics.get('rmse', 'Н/Д'))
+                        formatted_mae = f"{metrics.get('mae', 'Н/Д'):.4f}" if isinstance(metrics.get('mae', 'Н/Д'), (int, float)) else str(metrics.get('mae', 'Н/Д'))
+                        formatted_mape = f"{metrics.get('mape', 'Н/Д'):.4f}" if isinstance(metrics.get('mape', 'Н/Д'), (int, float)) else str(metrics.get('mape', 'Н/Д'))
+                        formatted_smape = f"{metrics.get('smape', 'Н/Д'):.4f}" if isinstance(metrics.get('smape', 'Н/Д'), (int, float)) else str(metrics.get('smape', 'Н/Д'))
+                        formatted_mase = f"{metrics.get('mase', 'Н/Д'):.4f}" if isinstance(metrics.get('mase', 'Н/Д'), (int, float)) else str(metrics.get('mase', 'Н/Д'))
+                        formatted_theil = f"{metrics.get('theil_u2', 'Н/Д'):.4f}" if isinstance(metrics.get('theil_u2', 'Н/Д'), (int, float)) else str(metrics.get('theil_u2', 'Н/Д'))
+                        
+                        # Add row to table with proper formatting
+                        table_md += f"| {exp['rank']} | {exp['model_info']} | {formatted_criterion} | "
+                        table_md += f"{formatted_r2} | {formatted_adj_r2} | {formatted_rmse} | "
+                        table_md += f"{formatted_mae} | {formatted_mape} | {formatted_smape} | "
+                        table_md += f"{formatted_mase} | {formatted_theil} |\n"
                     
                     consolidated_md += table_md + "\n\n"
                     
-                    # Add details for each model
-                    for i, exp in enumerate(sorted(st.session_state.auto_tuning_experiments, key=lambda x: x['rank'])[:5]):  # Limit to top 5
+                    # Add details for each model (top 5)
+                    for i, exp in enumerate(sorted_experiments[:5]):
                         consolidated_md += f"## Модель {i+1}: {exp['model_info']}\n\n"
                         
                         # Format parameters
                         params_text = "\n".join([f"- **{k}**: {v}" for k, v in exp['params'].items()])
                         consolidated_md += f"### Параметры\n{params_text}\n\n"
                         
-                        # Format metrics
-                        consolidated_md += "### Метрики\n\n"
-                        consolidated_md += "**Обучающая выборка:**\n"
-                        train_metrics = exp['train_metrics']
-                        consolidated_md += f"- RMSE: {train_metrics.get('rmse', 'Н/Д'):.4f}\n"
-                        consolidated_md += f"- MAE: {train_metrics.get('mae', 'Н/Д'):.4f}\n"
-                        consolidated_md += f"- MAPE: {train_metrics.get('mape', 'Н/Д'):.4f}\n\n"
+                        # Add timing information
+                        train_time = exp.get('train_time', 0)
+                        metrics_time = exp.get('metrics_time', 0)
+                        total_time = exp.get('total_time', train_time)
                         
+                        consolidated_md += f"### Время выполнения\n"
+                        consolidated_md += f"- **Обучение модели**: {train_time:.4f} сек.\n"
+                        if metrics_time > 0:
+                            consolidated_md += f"- **Расчет метрик**: {metrics_time:.4f} сек.\n"
+                        consolidated_md += f"- **Общее время**: {total_time:.4f} сек.\n\n"
+                        
+                        # Format metrics with all available metrics
+                        consolidated_md += "### Метрики\n\n"
+                        # ...existing code...
+                        for metric_name, nice_name in [
+                            ('r2', 'R²'), ('adj_r2', 'Adjusted R²'), ('mse', 'MSE'),
+                            ('rmse', 'RMSE'), ('mae', 'MAE'), ('mape', 'MAPE'),
+                            ('smape', 'SMAPE'), ('mase', 'MASE'), ('theil_u2', 'Theil U2')
+                        ]:
+                            value = train_metrics.get(metric_name, 'Н/Д')
+                            formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
+                            consolidated_md += f"- **{nice_name}**: {formatted_value}\n"
+                        
+                        consolidated_md += "\n"
+                        
+                        # Test metrics with proper formatting
                         consolidated_md += "**Тестовая выборка:**\n"
                         test_metrics = exp['test_metrics']
-                        consolidated_md += f"- RMSE: {test_metrics.get('rmse', 'Н/Д'):.4f}\n"
-                        consolidated_md += f"- MAE: {test_metrics.get('mae', 'Н/Д'):.4f}\n"
-                        consolidated_md += f"- MAPE: {test_metrics.get('mape', 'Н/Д'):.4f}\n\n"
+                        
+                        # Apply proper formatting for each metric
+                        for metric_name, nice_name in [
+                            ('r2', 'R²'), ('adj_r2', 'Adjusted R²'), ('mse', 'MSE'),
+                            ('rmse', 'RMSE'), ('mae', 'MAE'), ('mape', 'MAPE'),
+                            ('smape', 'SMAPE'), ('mase', 'MASE'), ('theil_u2', 'Theil U2')
+                        ]:
+                            value = test_metrics.get(metric_name, 'Н/Д')
+                            formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
+                            consolidated_md += f"- **{nice_name}**: {formatted_value}\n"
+                        
+                        consolidated_md += "\n"
                         
                         # Add separator
                         consolidated_md += "---\n\n"
@@ -1036,8 +1157,8 @@ def main():
                 model=st.session_state.ar_model,
                 steps=len(results['test']),
                 original_data=results['original_series'],
-                train_data=results['train'],
-                test_data=results['test'],
+                train_data=st.session_state.ar_results['train'],
+                test_data=st.session_state.ar_results['test'],
                 title="Результаты прогнозирования"
             )
             forecast_img_base64 = reporting.save_plot_to_base64(forecast_fig, backend='matplotlib')

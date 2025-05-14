@@ -661,53 +661,63 @@ def plot_residuals_diagnostic(model: BaseTimeSeriesModel) -> go.Figure:
     
     # 4. Остатки vs. Предсказанные значения
     try:
-        fitted_values = model.fitted_model.fittedvalues.dropna()
-        common_index = residuals.index.intersection(fitted_values.index)
+        # Получаем прогнозируемые значения
+        fitted_values = model.predict_in_sample()
         
-        if len(common_index) > 0:
-            res_common = residuals.loc[common_index]
-            fit_common = fitted_values.loc[common_index]
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=fit_common,
-                    y=res_common,
-                    mode='markers',
-                    name='Остатки vs. Предсказанные',
-                    marker=dict(color='blue')
-                ),
-                row=2, col=2
-            )
-            
-            # Добавляем горизонтальную линию y=0
-            fig.add_trace(
-                go.Scatter(
-                    x=[min(fit_common), max(fit_common)],
-                    y=[0, 0],
-                    mode='lines',
-                    line=dict(color='red', dash='dash'),
-                    name='y=0'
-                ),
-                row=2, col=2
-            )
-        else:
-            warnings.warn("Не удалось построить график остатков vs. предсказанные значения из-за несовпадения индексов.")
+        # Создаем график остатков против прогнозируемых значений
+        fig.add_trace(
+            go.Scatter(
+                x=fitted_values,
+                y=residuals,
+                mode='markers',
+                name='Остатки vs. Прогноз',
+                marker=dict(color='blue')
+            ),
+            row=2, col=2
+        )
+        
+        # Добавляем горизонтальную линию y=0
+        fig.add_trace(
+            go.Scatter(
+                x=[min(fitted_values), max(fitted_values)],
+                y=[0, 0],
+                mode='lines',
+                line=dict(color='red', dash='dash'),
+                name='y=0',
+                showlegend=False
+            ),
+            row=2, col=2
+        )
     except Exception as e:
-        warnings.warn(f"Ошибка при построении графика остатков vs. предсказанные значения: {str(e)}")
+        warnings.warn(f"Ошибка при построении графика остатков vs. прогноз: {str(e)}")
     
     # Обновляем макет графика
     fig.update_layout(
-        height=600,
-        showlegend=False,
-        title_text="Диагностика остатков модели"
+        height=800,
+        width=1200,
+        title_text="Диагностика остатков модели",
+        showlegend=True
     )
+    
+    # Настраиваем оси
+    fig.update_xaxes(title_text="Время", row=1, col=1)
+    fig.update_yaxes(title_text="Остатки", row=1, col=1)
+    
+    fig.update_xaxes(title_text="Значение остатков", row=1, col=2)
+    fig.update_yaxes(title_text="Частота", row=1, col=2)
+    
+    fig.update_xaxes(title_text="Теоретические квантили", row=2, col=1)
+    fig.update_yaxes(title_text="Выборочные квантили", row=2, col=1)
+    
+    fig.update_xaxes(title_text="Прогнозируемые значения", row=2, col=2)
+    fig.update_yaxes(title_text="Остатки", row=2, col=2)
     
     return fig
 
 
 def plot_residuals_diagnostic_matplotlib(model: BaseTimeSeriesModel) -> plt.Figure:
     """
-    Создает диагностические графики для остатков модели с использованием matplotlib.
+    Создает диагностические графики для остатков модели используя matplotlib (для экспорта в PDF).
     
     Параметры:
     -----------
@@ -717,25 +727,26 @@ def plot_residuals_diagnostic_matplotlib(model: BaseTimeSeriesModel) -> plt.Figu
     Возвращает:
     -----------
     plt.Figure
-        Фигура с графиками диагностики остатков для отчетов
+        Фигура matplotlib с графиками диагностики остатков
     """
     if not hasattr(model, 'fitted_model') or model.fitted_model is None:
         raise ValueError("Модель не обучена. Отсутствует атрибут 'fitted_model'.")
     
     residuals = model.fitted_model.resid.dropna()
     
-    # Создаем график с подграфиками (2x2)
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    # Создаем фигуру с подграфиками (2x2)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     
     # 1. График остатков во времени
     axes[0, 0].plot(residuals.index, residuals, color='blue')
     axes[0, 0].axhline(y=0, color='red', linestyle='--')
     axes[0, 0].set_title('Остатки')
+    axes[0, 0].set_xlabel('Время')
+    axes[0, 0].set_ylabel('Величина остатков')
     axes[0, 0].grid(True, alpha=0.3)
     
     # 2. Гистограмма остатков
-    axes[0, 1].hist(residuals, bins=20, color='blue', alpha=0.7)
-    axes[0, 1].set_title('Гистограмма остатков')
+    axes[0, 1].hist(residuals, bins=30, color='blue', alpha=0.7)
     
     # Добавляем кривую нормального распределения
     x_range = np.linspace(min(residuals), max(residuals), 100)
@@ -744,35 +755,40 @@ def plot_residuals_diagnostic_matplotlib(model: BaseTimeSeriesModel) -> plt.Figu
     pdf = stats.norm.pdf(x_range, mean, std)
     
     # Масштабируем PDF к высоте гистограммы
-    hist_count, _ = np.histogram(residuals, bins=20)
+    hist_count, _ = np.histogram(residuals, bins=30)
     scale_factor = max(hist_count) / max(pdf) if max(pdf) > 0 else 1
+    
     axes[0, 1].plot(x_range, pdf * scale_factor, 'r-', linewidth=2)
+    axes[0, 1].set_title('Гистограмма остатков')
+    axes[0, 1].set_xlabel('Величина остатков')
+    axes[0, 1].set_ylabel('Частота')
+    axes[0, 1].grid(True, alpha=0.3)
     
     # 3. QQ-график
     try:
-        qq = stats.probplot(residuals, dist='norm')
-        axes[1, 0].plot(qq[0][0], qq[0][1], 'o', color='blue')
-        axes[1, 0].plot(qq[0][0], qq[0][0], 'r-')
-        axes[1, 0].set_title('QQ-график')
+        stats.probplot(residuals, dist="norm", plot=axes[1, 0])
+        axes[1, 0].set_title('QQ-график остатков')
+        axes[1, 0].grid(True, alpha=0.3)
     except Exception as e:
         axes[1, 0].text(0.5, 0.5, f"Ошибка построения QQ-графика: {str(e)}", 
-                        ha='center', va='center', transform=axes[1, 0].transAxes)
+                        ha='center', va='center')
+        axes[1, 0].set_title('QQ-график остатков (ошибка)')
     
     # 4. Остатки vs. Предсказанные значения
     try:
-        fitted_values = model.fitted_model.fittedvalues.dropna()
-        common_index = residuals.index.intersection(fitted_values.index)
+        # Получаем прогнозируемые значения
+        fitted_values = model.predict_in_sample()
         
-        if len(common_index) > 0:
-            res_common = residuals.loc[common_index]
-            fit_common = fitted_values.loc[common_index]
-            
-            axes[1, 1].scatter(fit_common, res_common, color='blue', alpha=0.7)
-            axes[1, 1].axhline(y=0, color='red', linestyle='--')
-            axes[1, 1].set_title('Остатки vs. Предсказанные')
+        axes[1, 1].scatter(fitted_values, residuals, color='blue', alpha=0.7)
+        axes[1, 1].axhline(y=0, color='red', linestyle='--')
+        axes[1, 1].set_title('Остатки vs. Прогнозируемые значения')
+        axes[1, 1].set_xlabel('Прогнозируемые значения')
+        axes[1, 1].set_ylabel('Остатки')
+        axes[1, 1].grid(True, alpha=0.3)
     except Exception as e:
         axes[1, 1].text(0.5, 0.5, f"Ошибка построения графика: {str(e)}", 
-                        ha='center', va='center', transform=axes[1, 1].transAxes)
+                       ha='center', va='center')
+        axes[1, 1].set_title('Остатки vs. Прогнозируемые значения (ошибка)')
     
     plt.tight_layout()
     return fig
