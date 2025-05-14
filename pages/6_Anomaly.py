@@ -4,9 +4,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import itertools
 
 st.set_page_config(page_title="Анализ аномалий во временных рядах", layout="wide")
 
+# Импортируем новые функции из модуля
 from modules.anomaly_module import (
     generate_anomalous_series,
     add_anomalies_to_existing_data,
@@ -14,8 +16,11 @@ from modules.anomaly_module import (
     iqr_detection,
     hampel_filter,
     detect_plateau,
-    evaluate_anomaly_detection,  # Импортируем новую функцию
-    create_true_anomaly_mask  # Добавляем импорт этой функции для визуализации
+    evaluate_anomaly_detection,
+    create_true_anomaly_mask,
+    run_parameter_experiment,     # Новая функция для экспериментов
+    get_default_parameter_ranges,  # Новая функция для получения диапазонов параметров
+    suggest_optimal_parameters     # Новая функция для рекомендации параметров
 )
 
 # Инициализация состояния сессии
@@ -1107,30 +1112,500 @@ else:
     st.info("Для оценки качества обнаружения добавьте аномалии в данные.")
 
 # ====================
-# ЭКСПОРТ ДАННЫХ
+# ЧИСЛЕННЫЙ ЭКСПЕРИМЕНТ
 # ====================
-if data_source == "Загруженные данные" and 'original' in df.columns:
-    # Для реальных данных предлагаем скачать данные с добавленными аномалиями
-    export_df = pd.DataFrame({
-        'original_data': df['original'],
-        'data_with_anomalies': df['data']
-    })
-    
-    # Если исходный DataFrame имел DatetimeIndex, сохраняем его
-    if isinstance(st.session_state.data.index, pd.DatetimeIndex):
-        export_df.index = st.session_state.data.index
-    
-    download_label = "Скачать данные с аномалиями"
-    download_filename = 'time_series_with_anomalies.csv'
-else:
-    # Для синтетических данных экспортируем только сгенерированный ряд
-    export_df = df
-    download_label = "Скачать данные"
-    download_filename = 'synthetic_time_series.csv'
 
-st.download_button(
-    label=download_label,
-    data=export_df.to_csv(index=True).encode('utf-8'),
-    file_name=download_filename,
-    mime='text/csv'
-)
+st.header("🧪 Численный эксперимент", help="Анализ влияния параметров на качество обнаружения аномалий")
+
+if has_injected_anomalies:
+    # Если есть аномалии, предлагаем провести эксперимент
+    experiment_tab1, experiment_tab2 = st.tabs([
+        "🔬 Настройка эксперимента", 
+        "📊 Результаты"
+    ])
+    
+    with experiment_tab1:
+        st.subheader("Настройка численного эксперимента")
+        
+        # Выбор метода для эксперимента
+        exp_method = st.selectbox(
+            "Выберите метод для анализа",
+            options=["Z-Score", "IQR", "Фильтр Хампеля", "Детекция плато"],
+            format_func=lambda x: x,
+            help="Метод обнаружения аномалий, параметры которого будут анализироваться"
+        )
+        
+        # Преобразуем название метода для внутреннего использования
+        method_mapping = {
+            "Z-Score": "z_score",
+            "IQR": "iqr",
+            "Фильтр Хампеля": "hampel",
+            "Детекция плато": "plateau"
+        }
+        internal_method = method_mapping[exp_method]
+        
+        # Получаем диапазоны параметров по умолчанию
+        default_ranges = get_default_parameter_ranges()
+        
+        # Настройка параметров для анализа в зависимости от выбранного метода
+        st.write("### Выберите диапазоны параметров для анализа")
+        
+        param_ranges = {}
+        fixed_params = {}
+        
+        if internal_method == "z_score":
+            # Настройка Z-Score
+            col1, col2 = st.columns(2)
+            with col1:
+                threshold_min = st.number_input("Минимальное значение порога", 0.5, 10.0, 1.0, 0.5)
+                threshold_max = st.number_input("Максимальное значение порога", threshold_min, 10.0, 5.0, 0.5)
+                threshold_step = st.number_input("Шаг значения порога", 0.1, 1.0, 0.5, 0.5)
+            
+            with col2:
+                st.markdown("""
+                **Параметр threshold:**
+                * Определяет чувствительность метода
+                * Меньшие значения → больше аномалий
+                * Большие значения → меньше аномалий, но более уверенная детекция
+                """)
+            
+            # Создаем диапазон значений
+            threshold_range = np.arange(threshold_min, threshold_max + threshold_step/2, threshold_step).tolist()
+            param_ranges['threshold'] = threshold_range
+            
+        elif internal_method == "iqr":
+            # Настройка IQR
+            col1, col2 = st.columns(2)
+            with col1:
+                multiplier_min = st.number_input("Минимальное значение множителя", 0.5, 5.0, 0.5, 0.5)
+                multiplier_max = st.number_input("Максимальное значение множителя", multiplier_min, 5.0, 3.0, 0.5)
+                multiplier_step = st.number_input("Шаг значения множителя", 0.1, 1.0, 0.5, 0.1)
+            
+            with col2:
+                st.markdown("""
+                **Параметр multiplier:**
+                * Определяет границы выбросов: Q1 - k*IQR и Q3 + k*IQR
+                * Стандартное значение: 1.5 (умеренные выбросы)
+                * 3.0 для экстремальных выбросов
+                """)
+            
+            # Создаем диапазон значений
+            multiplier_range = np.arange(multiplier_min, multiplier_max + multiplier_step/2, multiplier_step).tolist()
+            param_ranges['multiplier'] = multiplier_range
+            
+        elif internal_method == "hampel":
+            # Настройка Hampel
+            st.write("#### Выберите параметр для анализа:")
+            hampel_param = st.radio(
+                "Параметр для анализа:",
+                options=["window", "sigma", "window_percent"],
+                format_func=lambda x: {
+                    "window": "Размер окна (точек)",
+                    "sigma": "Коэффициент чувствительности",
+                    "window_percent": "Размер окна (% от длины ряда)"
+                }[x]
+            )
+            
+            # В зависимости от выбранного параметра
+            if hampel_param == "window":
+                col1, col2 = st.columns(2)
+                with col1:
+                    window_min = st.number_input("Минимальный размер окна", 3, 100, 5, 1)
+                    window_max = st.number_input("Максимальный размер окна", window_min, 200, 30, 5)
+                    window_step = st.number_input("Шаг размера окна", 1, 20, 5, 1)
+                    
+                    # Фиксируем другие параметры
+                    sigma = st.number_input("Коэффициент чувствительности (фиксированный)", 1.0, 5.0, 3.0, 0.5)
+                    fixed_params['sigma'] = sigma
+                    fixed_params['adaptive_window'] = False
+                
+                with col2:
+                    st.markdown("""
+                    **Размер окна:**
+                    * Определяет контекст для расчета медианы
+                    * Меньшие значения → выше чувствительность к локальным изменениям
+                    * Большие значения → большая устойчивость к шумам
+                    """)
+                
+                # Создаем диапазон значений
+                window_range = range(window_min, window_max + 1, window_step)
+                param_ranges['window'] = list(window_range)
+                
+            elif hampel_param == "sigma":
+                col1, col2 = st.columns(2)
+                with col1:
+                    sigma_min = st.number_input("Минимальное значение коэффициента", 0.5, 5.0, 1.0, 0.5)
+                    sigma_max = st.number_input("Максимальное значение коэффициента", sigma_min, 10.0, 4.0, 0.5)
+                    sigma_step = st.number_input("Шаг значения коэффициента", 0.1, 1.0, 0.5, 0.1)
+                    
+                    # Настройка фиксированных параметров
+                    adaptive = st.checkbox("Использовать адаптивное окно", True)
+                    if adaptive:
+                        fixed_window_percent = st.number_input("Процент от длины ряда (%)", 0.1, 5.0, 0.5, 0.1)
+                        fixed_params['adaptive_window'] = True
+                        fixed_params['window_percent'] = fixed_window_percent
+                    else:
+                        fixed_window = st.number_input("Размер окна (точек)", 3, 100, 20, 1)
+                        fixed_params['adaptive_window'] = False
+                        fixed_params['window'] = fixed_window
+                
+                with col2:
+                    st.markdown("""
+                    **Коэффициент чувствительности:**
+                    * Множитель для MAD (медианное абсолютное отклонение)
+                    * Меньшие значения → больше аномалий будет обнаружено
+                    * Большие значения → только явные аномалии
+                    * 3.0 примерно соответствует 3σ в нормальном распределении
+                    """)
+                
+                # Создаем диапазон значений
+                sigma_range = np.arange(sigma_min, sigma_max + sigma_step/2, sigma_step).tolist()
+                param_ranges['sigma'] = sigma_range
+                
+            elif hampel_param == "window_percent":
+                col1, col2 = st.columns(2)
+                with col1:
+                    wp_min = st.number_input("Минимальный процент", 0.1, 5.0, 0.1, 0.1)
+                    wp_max = st.number_input("Максимальный процент", wp_min, 10.0, 2.0, 0.1)
+                    wp_step = st.number_input("Шаг процента", 0.1, 1.0, 0.2, 0.1)
+                    
+                    # Настройка фиксированных параметров
+                    sigma = st.number_input("Коэффициент чувствительности (фиксированный)", 1.0, 5.0, 3.0, 0.5)
+                    fixed_params['sigma'] = sigma
+                    fixed_params['adaptive_window'] = True
+                
+                with col2:
+                    st.markdown("""
+                    **Размер окна как процент от длины ряда:**
+                    * Позволяет адаптировать размер окна к длине ряда
+                    * Рекомендуемые значения: 0.5-1% для данных с высокой частотой
+                    * 1-3% для данных с низкой частотой
+                    """)
+                
+                # Создаем диапазон значений
+                wp_range = np.arange(wp_min, wp_max + wp_step/2, wp_step).tolist()
+                param_ranges['window_percent'] = wp_range
+        
+        elif internal_method == "plateau":
+            # Настройка Plateau
+            st.write("#### Выберите параметр для анализа:")
+            plateau_param = st.radio(
+                "Параметр для анализа:",
+                options=["threshold", "min_duration"],
+                format_func=lambda x: {
+                    "threshold": "Порог производной", 
+                    "min_duration": "Минимальная длительность плато"
+                }[x]
+            )
+            
+            if plateau_param == "threshold":
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Используем логарифмическую шкалу для порога
+                    threshold_min_exp = st.slider("Минимальное значение порога (10^x)", -6, -1, -4)
+                    threshold_max_exp = st.slider("Максимальное значение порога (10^x)", threshold_min_exp, 0, -2)
+                    num_steps = st.number_input("Количество точек", 3, 20, 10, 1)
+                    
+                    # Фиксируем другие параметры
+                    min_duration = st.number_input("Минимальная длительность (фиксированная)", 1, 50, 10, 1)
+                    fixed_params['min_duration'] = min_duration
+                
+                with col2:
+                    st.markdown("""
+                    **Порог производной:**
+                    * Определяет максимальное допустимое изменение для плато
+                    * Меньшие значения → более строгое определение "плато"
+                    * Большие значения → больше участков будет считаться плато
+                    """)
+                
+                # Создаем логарифмический диапазон значений
+                threshold_min = 10 ** threshold_min_exp
+                threshold_max = 10 ** threshold_max_exp
+                threshold_range = np.logspace(threshold_min_exp, threshold_max_exp, num_steps).tolist()
+                param_ranges['threshold'] = threshold_range
+                
+            elif plateau_param == "min_duration":
+                col1, col2 = st.columns(2)
+                with col1:
+                    duration_min = st.number_input("Минимальная длительность", 1, 20, 2, 1)
+                    duration_max = st.number_input("Максимальная длительность", duration_min, 100, 30, 1)
+                    duration_step = st.number_input("Шаг длительности", 1, 10, 2, 1)
+                    
+                    # Фиксируем другие параметры
+                    threshold = st.number_input("Порог производной (фиксированный)", 0.0, 0.1, 0.001, 0.001, format="%.5f")
+                    fixed_params['threshold'] = threshold
+                
+                with col2:
+                    st.markdown("""
+                    **Минимальная длительность плато:**
+                    * Определяет, сколько последовательных точек должно быть в плато
+                    * Меньшие значения → больше коротких плато будет обнаружено
+                    * Большие значения → только длинные плато
+                    """)
+                
+                # Создаем диапазон значений
+                duration_range = range(duration_min, duration_max + 1, duration_step)
+                param_ranges['min_duration'] = list(duration_range)
+        
+        # Кнопка запуска эксперимента
+        st.subheader("Запуск эксперимента")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.info(f"""
+            **Метод: {exp_method}**
+            Параметры для перебора: {param_ranges}
+            Фиксированные параметры: {fixed_params}
+            
+            Будет выполнено {np.prod([len(vals) for vals in param_ranges.values()])} экспериментов.
+            """)
+        
+        with col2:
+            run_experiment = st.button("Запустить эксперимент", type="primary")
+        
+        if run_experiment:
+            with st.spinner("Выполнение численного эксперимента..."):
+                # Получаем истинную маску аномалий для оценки качества
+                if data_source == "Синтетические данные":
+                    injected_anomalies = metadata
+                else:
+                    injected_anomalies = metadata
+                
+                true_anomaly_mask = create_true_anomaly_mask(injected_anomalies, len(df))
+                
+                # Запускаем эксперимент
+                experiment_results = run_parameter_experiment(
+                    data=df['data'].values,
+                    true_anomalies=true_anomaly_mask,
+                    method=internal_method,
+                    param_ranges=param_ranges,
+                    fixed_params=fixed_params
+                )
+                
+                # Сохраняем результаты в session_state
+                st.session_state.experiment_results = experiment_results
+                st.session_state.experiment_method = internal_method
+                st.session_state.experiment_params = list(param_ranges.keys())
+                
+                # Переключаемся на вкладку результатов
+                st.success("Эксперимент завершен! Перейдите на вкладку 'Результаты' для просмотра.")
+    
+    # Вкладка с результатами
+    with experiment_tab2:
+        st.subheader("Результаты численного эксперимента")
+        
+        if 'experiment_results' in st.session_state:
+            results_df = st.session_state.experiment_results
+            method = st.session_state.experiment_method
+            params = st.session_state.experiment_params
+            
+            # Показываем общую статистику
+            st.write(f"### 📊 Всего экспериментов: {len(results_df)}")
+            
+            # Находим оптимальные параметры
+            optimal_params = suggest_optimal_parameters(results_df)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write("#### 🥇 Лучший F1-Score")
+                best_f1 = optimal_params['best_f1']
+                st.info(f"""
+                **F1-Score: {best_f1['f1']:.3f}**
+                Precision: {best_f1['precision']:.3f}
+                Recall: {best_f1['recall']:.3f}
+                
+                Параметры:
+                {', '.join([f'{key}: {value}' for key, value in best_f1.items() if key in params])}
+                """)
+            
+            with col2:
+                st.write("#### 🎯 Лучшая точность (Precision)")
+                best_precision = optimal_params['best_precision']
+                st.info(f"""
+                **Precision: {best_precision['precision']:.3f}**
+                Recall: {best_precision['recall']:.3f}
+                F1-Score: {best_precision['f1']:.3f}
+                
+                Параметры:
+                {', '.join([f'{key}: {value}' for key, value in best_precision.items() if key in params])}
+                """)
+            
+            with col3:
+                st.write("#### 🔍 Лучшая полнота (Recall)")
+                best_recall = optimal_params['best_recall']
+                st.info(f"""
+                **Recall: {best_recall['recall']:.3f}**
+                Precision: {best_recall['precision']:.3f}
+                F1-Score: {best_recall['f1']:.3f}
+                
+                Параметры:
+                {', '.join([f'{key}: {value}' for key, value in best_recall.items() if key in params])}
+                """)
+            
+            # Визуализация результатов
+            st.write("### Визуализация результатов эксперимента")
+            
+            # Если в эксперименте изменялся только один параметр
+            if len(params) == 1:
+                param = params[0]
+                
+                # Строим график зависимости метрик от параметра
+                fig_metrics = go.Figure()
+                
+                # Сортируем DataFrame по значению параметра
+                sorted_df = results_df.sort_values(param)
+                
+                # Добавляем линии для каждой метрики
+                fig_metrics.add_trace(go.Scatter(
+                    x=sorted_df[param], 
+                    y=sorted_df['precision'],
+                    mode='lines+markers',
+                    name='Precision',
+                    line=dict(color='blue', width=2)
+                ))
+                
+                fig_metrics.add_trace(go.Scatter(
+                    x=sorted_df[param], 
+                    y=sorted_df['recall'],
+                    mode='lines+markers',
+                    name='Recall',
+                    line=dict(color='red', width=2)
+                ))
+                
+                fig_metrics.add_trace(go.Scatter(
+                    x=sorted_df[param], 
+                    y=sorted_df['f1'],
+                    mode='lines+markers',
+                    name='F1-Score',
+                    line=dict(color='green', width=2)
+                ))
+                
+                # Настраиваем внешний вид графика
+                fig_metrics.update_layout(
+                    title=f"Влияние параметра {param} на метрики качества",
+                    xaxis_title=param,
+                    yaxis_title="Значение метрики",
+                    yaxis=dict(range=[0, 1.05]),
+                    height=500,
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                
+                st.plotly_chart(fig_metrics, use_container_width=True)
+                
+                # Добавляем интерактивную таблицу результатов
+                st.write("### Таблица результатов")
+                st.caption("Лучшие значения для каждой метрики выделены цветом: Precision - зеленый, Recall - синий, F1-score - голубой")
+                
+                # Создаем функцию для стилизации таблицы с разными цветами для разных метрик
+                def highlight_metrics(data):
+                    # Проверяем, является ли data Series или DataFrame
+                    if isinstance(data, pd.Series):
+                        # Если Series, возвращаем пустую строку (нет форматирования) или форматируем отдельную ячейку
+                        return ''
+                    else:
+                        # Если DataFrame, форматируем как раньше
+                        styles = pd.DataFrame('', index=data.index, columns=data.columns)
+                        # Выделяем максимальное значение precision зеленым цветом
+                        styles.loc[data['precision'] == data['precision'].max(), 'precision'] = 'background-color: #a8d08d'
+                        # Выделяем максимальное значение recall синим цветом
+                        styles.loc[data['recall'] == data['recall'].max(), 'recall'] = 'background-color: #8db3e2'
+                        # Выделяем максимальное значение f1 голубым цветом
+                        styles.loc[data['f1'] == data['f1'].max(), 'f1'] = 'background-color: #c6e0b4'
+                        return styles
+                
+                # Используем более безопасный подход с highlight_max вместо apply
+                st.dataframe(
+                    sorted_df.sort_values('f1', ascending=False).style.highlight_max(subset=['precision'], color='#a8d08d')
+                    .highlight_max(subset=['recall'], color='#8db3e2')
+                    .highlight_max(subset=['f1'], color='#c6e0b4'),
+                    use_container_width=True
+                )
+                
+            # Если в эксперименте изменялось два параметра
+            elif len(params) == 2:
+                param1, param2 = params
+                
+                # Создаем сводную таблицу для визуализации теплокарты
+                pivot_df = results_df.pivot(index=param1, columns=param2, values='f1')
+                
+                # Визуализация в виде теплокарты
+                fig_heatmap = go.Figure(data=go.Heatmap(
+                    z=pivot_df.values,
+                    x=pivot_df.columns,
+                    y=pivot_df.index,
+                    colorscale='Viridis',
+                    colorbar=dict(title='F1-Score'),
+                    hoverongaps=False,
+                    hovertemplate=f"{param1}: %{{y}}<br>{param2}: %{{x}}<br>F1-Score: %{{z}}<extra></extra>"
+                ))
+                
+                fig_heatmap.update_layout(
+                    title=f"Теплокарта F1-Score в зависимости от {param1} и {param2}",
+                    xaxis_title=param2,
+                    yaxis_title=param1,
+                    height=500
+                )
+                
+                st.plotly_chart(fig_heatmap, use_container_width=True)
+                
+                # Даем возможность выбрать метрику для визуализации
+                selected_metric = st.selectbox(
+                    "Выберите метрику для визуализации:",
+                    options=["f1", "precision", "recall", "num_anomalies"]
+                )
+                
+                # Создаем сводную таблицу для выбранной метрики
+                pivot_metric = results_df.pivot(index=param1, columns=param2, values=selected_metric)
+                
+                # Визуализация в виде 3D поверхности
+                fig_3d = go.Figure(data=[go.Surface(
+                    z=pivot_metric.values,
+                    x=pivot_metric.columns,
+                    y=pivot_metric.index,
+                    colorscale='Viridis',
+                    colorbar=dict(title=selected_metric.capitalize()),
+                    contours={
+                        "z": {"show": True, "start": 0, "end": 1, "size": 0.05}
+                    }
+                )])
+                
+                fig_3d.update_layout(
+                    title=f"3D-поверхность {selected_metric} в зависимости от {param1} и {param2}",
+                    scene=dict(
+                        xaxis_title=param2,
+                        yaxis_title=param1,
+                        zaxis_title=selected_metric
+                    ),
+                    height=600
+                )
+                
+                st.plotly_chart(fig_3d, use_container_width=True)
+                
+                # Таблица с результатами
+                st.write("### Таблица результатов")
+                st.caption("Лучшие значения для каждой метрики выделены цветом: Precision - зеленый, Recall - синий, F1-score - голубой")
+                
+                # Используем встроенные методы highlight_max вместо custom функции
+                st.dataframe(
+                    results_df.sort_values('f1', ascending=False).style.highlight_max(subset=['precision'], color='#a8d08d')
+                    .highlight_max(subset=['recall'], color='#8db3e2')
+                    .highlight_max(subset=['f1'], color='#c6e0b4'),
+                    use_container_width=True
+                )
+            
+            # Если параметров больше двух, показываем таблицу
+            else:
+                st.write("### Таблица результатов")
+                st.caption("Лучшие значения для каждой метрики выделены цветом: Precision - зеленый, Recall - синий, F1-score - голубой")
+                
+                # Используем встроенные методы highlight_max вместо custom функции
+                st.dataframe(
+                    results_df.sort_values('f1', ascending=False).style.highlight_max(subset=['precision'], color='#a8d08d')
+                    .highlight_max(subset=['recall'], color='#8db3e2')
+                    .highlight_max(subset=['f1'], color='#c6e0b4'),
+                    use_container_width=True
+                )
+        else:
+            st.info("Нет результатов экспериментов. Запустите эксперимент на вкладке 'Настройка эксперимента'.")
+else:
+    st.info("Для проведения численного эксперимента необходимо добавить аномалии в данные.")

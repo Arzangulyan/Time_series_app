@@ -7,6 +7,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import itertools
 from typing import List, Tuple, Dict, Union, Optional, Any, Callable
 import streamlit as st
 
@@ -643,3 +644,141 @@ def suggest_parameters(data: np.ndarray) -> Dict[str, float]:
     suggested_params['plateau_duration'] = max(3, min(30, n // 50))
     
     return suggested_params
+
+
+@st.cache_data
+def run_parameter_experiment(
+    data: np.ndarray,
+    true_anomalies: np.ndarray,
+    method: str,
+    param_ranges: Dict[str, List[float]],
+    fixed_params: Dict[str, Any] = None
+) -> pd.DataFrame:
+    """
+    Проводит численный эксперимент, перебирая различные значения параметров
+    для выбранного метода обнаружения аномалий.
+    
+    Args:
+        data: Временной ряд для анализа
+        true_anomalies: Истинная маска аномалий для оценки качества
+        method: Название метода ('z_score', 'iqr', 'hampel', 'plateau')
+        param_ranges: Словарь с диапазонами параметров для перебора
+        fixed_params: Словарь с фиксированными параметрами
+        
+    Returns:
+        DataFrame с результатами экспериментов
+    """
+    results = []
+    
+    # Установка значений по умолчанию для фиксированных параметров
+    if fixed_params is None:
+        fixed_params = {}
+    
+    # Получаем все комбинации параметров для перебора
+    param_names = list(param_ranges.keys())
+    param_values = list(param_ranges.values())
+    
+    # Генерируем все комбинации параметров
+    param_combinations = list(itertools.product(*param_values))
+    
+    # Для каждой комбинации параметров
+    for combo in param_combinations:
+        # Создаем словарь параметров для текущей комбинации
+        params = fixed_params.copy()
+        for i, param_name in enumerate(param_names):
+            params[param_name] = combo[i]
+        
+        # Запускаем детекцию аномалий с текущими параметрами
+        if method == 'z_score':
+            anomaly_mask = z_score_detection(data, threshold=params.get('threshold', 3.0))
+        elif method == 'iqr':
+            anomaly_mask, _ = iqr_detection(data, multiplier=params.get('multiplier', 1.5))
+        elif method == 'hampel':
+            anomaly_mask = hampel_filter(
+                data, 
+                window=params.get('window', 5),
+                sigma=params.get('sigma', 3.0),
+                adaptive_window=params.get('adaptive_window', False),
+                window_percent=params.get('window_percent', 0.5)
+            )
+        elif method == 'plateau':
+            plateau_results = detect_plateau(
+                data, 
+                threshold=params.get('threshold', 1e-3),
+                min_duration=params.get('min_duration', 5)
+            )
+            # Преобразуем результаты плато в маску
+            anomaly_mask = np.zeros(len(data), dtype=bool)
+            for p in plateau_results:
+                anomaly_mask[p['start']:p['end']+1] = True
+        else:
+            raise ValueError(f"Неизвестный метод: {method}")
+        
+        # Оцениваем качество обнаружения
+        metrics = calculate_metrics(true_anomalies, anomaly_mask)
+        
+        # Добавляем количество обнаруженных аномалий
+        num_anomalies = np.sum(anomaly_mask)
+        
+        # Сохраняем результаты
+        result = {**params, **metrics, 'num_anomalies': num_anomalies}
+        results.append(result)
+    
+    # Создаем DataFrame с результатами
+    return pd.DataFrame(results)
+
+
+@st.cache_data
+def get_default_parameter_ranges():
+    """
+    Возвращает словарь с диапазонами параметров по умолчанию для экспериментов.
+    
+    Returns:
+        Словарь с диапазонами параметров для каждого метода
+    """
+    return {
+        'z_score': {
+            'threshold': [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+        },
+        'iqr': {
+            'multiplier': [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+        },
+        'hampel': {
+            'window': [5, 10, 15, 20, 25, 30],
+            'sigma': [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
+            'window_percent': [0.1, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0]
+        },
+        'plateau': {
+            'threshold': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05],
+            'min_duration': [2, 5, 10, 15, 20, 25, 30]
+        }
+    }
+
+
+def suggest_optimal_parameters(experiment_results: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Анализирует результаты экспериментов и предлагает оптимальные параметры.
+    
+    Args:
+        experiment_results: DataFrame с результатами экспериментов
+        
+    Returns:
+        Словарь с оптимальными параметрами и метриками
+    """
+    # Находим строку с максимальным F1-score
+    best_idx = experiment_results['f1'].idxmax()
+    best_result = experiment_results.loc[best_idx]
+    
+    # Находим строку с лучшей точностью
+    best_precision_idx = experiment_results['precision'].idxmax()
+    best_precision = experiment_results.loc[best_precision_idx]
+    
+    # Находим строку с лучшей полнотой
+    best_recall_idx = experiment_results['recall'].idxmax()
+    best_recall = experiment_results.loc[best_recall_idx]
+    
+    return {
+        'best_f1': best_result.to_dict(),
+        'best_precision': best_precision.to_dict(),
+        'best_recall': best_recall.to_dict()
+    }
