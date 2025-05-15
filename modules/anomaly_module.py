@@ -389,16 +389,26 @@ def add_anomalies_to_existing_data(
             amplitude_range = pa.get('amplitude_range', (1, 2))
             increase = pa.get('increase', True)
             
-            data_with_anomalies = add_point_anomalies(
-                data_with_anomalies, indices, amplitude_range, increase
-            )
-            
+            # Проверяем, что все индексы числовые и конвертируем при необходимости
+            numeric_indices = []
             for idx in indices:
-                anomaly_info.append({
-                    'type': 'point',
-                    'index': idx,
-                    'increase': increase
-                })
+                if isinstance(idx, (int, np.integer)):
+                    numeric_indices.append(idx)
+                else:
+                    # Skip non-integer indices
+                    continue
+            
+            if numeric_indices:
+                data_with_anomalies = add_point_anomalies(
+                    data_with_anomalies, numeric_indices, amplitude_range, increase
+                )
+                
+                for idx in numeric_indices:
+                    anomaly_info.append({
+                        'type': 'point',
+                        'index': int(idx),  # Ensure index is integer
+                        'increase': increase
+                    })
     
     # Добавление протяженных аномалий
     if extended_anomalies:
@@ -407,13 +417,20 @@ def add_anomalies_to_existing_data(
             duration = ea.get('duration', 10)
             level_shift = ea.get('level_shift', 2.0)
             
+            # Ensure start_idx is numeric
+            if not isinstance(start_idx, (int, np.integer)):
+                try:
+                    start_idx = int(start_idx)
+                except (ValueError, TypeError):
+                    continue
+            
             data_with_anomalies = add_extended_anomaly(
                 data_with_anomalies, start_idx, duration, level_shift
             )
             
             anomaly_info.append({
                 'type': 'extended',
-                'start_idx': start_idx,
+                'start_idx': int(start_idx),  # Ensure index is integer
                 'duration': duration,
                 'level_shift': level_shift
             })
@@ -425,13 +442,20 @@ def add_anomalies_to_existing_data(
             duration = sf.get('duration', 5)
             fault_value = sf.get('fault_value', np.nan)
             
+            # Ensure start_idx is numeric
+            if not isinstance(start_idx, (int, np.integer)):
+                try:
+                    start_idx = int(start_idx)
+                except (ValueError, TypeError):
+                    continue
+            
             data_with_anomalies = add_sensor_fault(
                 data_with_anomalies, start_idx, duration, fault_value
             )
             
             anomaly_info.append({
                 'type': 'sensor_fault',
-                'start_idx': start_idx,
+                'start_idx': int(start_idx),  # Ensure index is integer
                 'duration': duration,
                 'fault_value': str(fault_value)  # Преобразуем в строку для JSON-совместимости
             })
@@ -458,12 +482,32 @@ def create_true_anomaly_mask(anomaly_info: List[Dict[str, Any]], length: int) ->
         
         if anom_type == 'point':
             idx = anomaly.get('index')
+            # Convert idx to integer if it's not already (handles Timestamp objects)
+            if not isinstance(idx, (int, np.integer)):
+                try:
+                    # Try to find the position in the original array
+                    # This is a fallback and may not work in all cases
+                    idx = int(idx)
+                except (ValueError, TypeError):
+                    # Skip this anomaly if we can't convert the index
+                    continue
+            
+            # Ensure index is within valid range
             if 0 <= idx < length:
                 true_mask[idx] = True
                 
         elif anom_type in ['extended', 'sensor_fault']:
             start_idx = anomaly.get('start_idx', 0)
             duration = anomaly.get('duration', 0)
+            
+            # Convert start_idx to integer if it's not already
+            if not isinstance(start_idx, (int, np.integer)):
+                try:
+                    start_idx = int(start_idx)
+                except (ValueError, TypeError):
+                    # Skip this anomaly if we can't convert the index
+                    continue
+                    
             end_idx = min(start_idx + duration, length)
             if start_idx < length:
                 true_mask[start_idx:end_idx] = True
@@ -550,8 +594,8 @@ def evaluate_anomaly_detection(
         # Тип должен быть bool или конвертируемым в bool
         try:
             if anomaly_mask.dtype != bool:
-                # Если массив не булевый, но это одномерный числовой массив,
-                # конвертируем в булевый тип
+                # Если массив не булев, но это одномерный числовой массив,
+                # конверируем в булевый тип
                 if anomaly_mask.ndim == 1 and np.issubdtype(anomaly_mask.dtype, np.number):
                     anomaly_mask = anomaly_mask.astype(bool)
                 else:
@@ -782,3 +826,195 @@ def suggest_optimal_parameters(experiment_results: pd.DataFrame) -> Dict[str, An
         'best_precision': best_precision.to_dict(),
         'best_recall': best_recall.to_dict()
     }
+
+
+def prepare_anomaly_report_data(
+    data: np.ndarray,
+    time_index: np.ndarray,
+    anomaly_info: List[Dict[str, Any]],
+    detection_results: Dict[str, np.ndarray],
+    detection_params: Dict[str, Any],
+    metrics_results: Optional[Dict[str, Dict[str, float]]] = None,
+    experiment_results: Optional[pd.DataFrame] = None,
+    optimal_params: Optional[Dict[str, Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    """
+    Подготавливает данные для отчета по обнаружению аномалий.
+    
+    Args:
+        data: Временной ряд данных
+        time_index: Временные метки
+        anomaly_info: Информация о внедренных аномалиях
+        detection_results: Результаты различных методов обнаружения
+        detection_params: Параметры методов обнаружения
+        metrics_results: Метрики качества обнаружения аномалий
+        experiment_results: Результаты численных экспериментов (если проводились)
+        optimal_params: Оптимальные параметры из экспериментов
+        
+    Returns:
+        Словарь с данными для отчета
+    """
+    # Базовая информация о данных
+    report_data = {
+        'data_length': len(data),
+        'has_nan': np.isnan(data).any(),
+        'data_stats': {
+            'mean': float(np.nanmean(data)),
+            'std': float(np.nanstd(data)),
+            'min': float(np.nanmin(data)),
+            'max': float(np.nanmax(data)),
+            'median': float(np.nanmedian(data)),
+            'iqr': float(np.nanpercentile(data, 75) - np.nanpercentile(data, 25))
+        },
+        'detection_params': detection_params,
+        'anomaly_info': anomaly_info
+    }
+    
+    # Информация об обнаруженных аномалиях
+    report_data['detection_results'] = {}
+    for method_name, result in detection_results.items():
+        if method_name == 'iqr_bounds':
+            continue
+        if isinstance(result, np.ndarray) and result.dtype == bool:
+            report_data['detection_results'][method_name] = {
+                'count': int(np.sum(result)),
+                'percentage': float(np.sum(result) / len(data) * 100)
+            }
+    
+    # Добавляем метрики качества, если они есть
+    if metrics_results:
+        report_data['metrics'] = metrics_results
+    
+    # Добавляем результаты экспериментов, если они есть
+    if experiment_results is not None:
+        report_data['experiment'] = {
+            'total_experiments': len(experiment_results),
+            'parameters': list(experiment_results.columns),
+            'best_f1': experiment_results.loc[experiment_results['f1'].idxmax()].to_dict(),
+            'best_precision': experiment_results.loc[experiment_results['precision'].idxmax()].to_dict(),
+            'best_recall': experiment_results.loc[experiment_results['recall'].idxmax()].to_dict()
+        }
+        
+        # Добавляем оптимальные параметры, если они есть
+        if optimal_params:
+            report_data['optimal_params'] = optimal_params
+    
+    return report_data
+
+
+def generate_anomaly_detection_yaml(report_data: Dict[str, Any]) -> str:
+    """
+    Генерирует YAML-секцию для отчета по обнаружению аномалий.
+    
+    Args:
+        report_data: Данные отчета
+        
+    Returns:
+        YAML-секция в виде строки
+    """
+    import datetime
+    import uuid
+    
+    # Формируем YAML front matter
+    experiment_id = f"ANOMALY_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{str(uuid.uuid4())[:8]}"
+    yaml_lines = [
+        '---',
+        f'experiment: "{experiment_id}"',
+        f'date: "{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"',
+        f'model: "anomaly_detection"',
+        f'data_length: {report_data["data_length"]}',
+        f'has_nan: {str(report_data["has_nan"]).lower()}'
+    ]
+    
+    # Добавляем статистики данных
+    yaml_lines.append('data_stats:')
+    for key, value in report_data['data_stats'].items():
+        yaml_lines.append(f'  {key}: {value}')
+    
+    # Добавляем параметры методов обнаружения
+    yaml_lines.append('detection_params:')
+    for method, params in report_data['detection_params'].items():
+        yaml_lines.append(f'  {method}:')
+        if isinstance(params, dict):
+            for param_name, param_value in params.items():
+                yaml_lines.append(f'    {param_name}: {param_value}')
+        else:
+            yaml_lines.append(f'    enabled: {params}')
+    
+    # Добавляем результаты обнаружения
+    yaml_lines.append('detection_results:')
+    for method, results in report_data['detection_results'].items():
+        yaml_lines.append(f'  {method}:')
+        for key, value in results.items():
+            yaml_lines.append(f'    {key}: {value}')
+    
+    # Добавляем метрики, если они есть
+    if 'metrics' in report_data:
+        yaml_lines.append('metrics:')
+        for method, metrics in report_data['metrics'].items():
+            yaml_lines.append(f'  {method}:')
+            for metric_name, metric_value in metrics.items():
+                yaml_lines.append(f'    {metric_name}: {metric_value}')
+    
+    # Добавляем информацию об экспериментах, если она есть
+    if 'experiment' in report_data:
+        yaml_lines.append('experiment:')
+        yaml_lines.append(f'  total_experiments: {report_data["experiment"]["total_experiments"]}')
+        if 'best_f1' in report_data['experiment']:
+            yaml_lines.append('  best_f1:')
+            for key, value in report_data['experiment']['best_f1'].items():
+                yaml_lines.append(f'    {key}: {value}')
+    
+    yaml_lines.append('---\n')
+    return '\n'.join(yaml_lines)
+
+
+def format_anomaly_info_for_report(anomaly_info: List[Dict[str, Any]]) -> str:
+    """
+    Форматирует информацию об аномалиях для отчета.
+    
+    Args:
+        anomaly_info: Список словарей с информацией об аномалиях
+        
+    Returns:
+        Отформатированная строка markdown
+    """
+    if not anomaly_info:
+        return "Не было добавлено аномалий."
+    
+    md = "## Внедренные аномалии\n\n"
+    
+    # Группируем аномалии по типам
+    point_anomalies = [a for a in anomaly_info if a.get('type') == 'point']
+    extended_anomalies = [a for a in anomaly_info if a.get('type') == 'extended']
+    sensor_faults = [a for a in anomaly_info if a.get('type') == 'sensor_fault']
+    
+    # Форматируем точечные аномалии
+    if point_anomalies:
+        md += "### Точечные аномалии\n\n"
+        md += "| Индекс | Направление |\n"
+        md += "|--------|------------|\n"
+        for pa in point_anomalies:
+            direction = "Вверх" if pa.get('increase', True) else "Вниз"
+            md += f"| {pa.get('index')} | {direction} |\n"
+        md += "\n"
+    
+    # Форматируем протяженные аномалии
+    if extended_anomalies:
+        md += "### Протяженные аномалии\n\n"
+        md += "| Начальный индекс | Длительность | Смещение уровня |\n"
+        md += "|-----------------|-------------|----------------|\n"
+        for ea in extended_anomalies:
+            md += f"| {ea.get('start_idx')} | {ea.get('duration')} | {ea.get('level_shift')} |\n"
+        md += "\n"
+    
+    # Форматируем сбои датчиков
+    if sensor_faults:
+        md += "### Сбои датчиков\n\n"
+        md += "| Начальный индекс | Длительность | Значение сбоя |\n"
+        md += "|-----------------|-------------|---------------|\n"
+        for sf in sensor_faults:
+            md += f"| {sf.get('start_idx')} | {sf.get('duration')} | {sf.get('fault_value')} |\n"
+        md += "\n"
+    
+    return md

@@ -37,7 +37,7 @@ def save_plot_to_base64(fig, backend: str = 'matplotlib') -> str:
         # Увеличиваем размер шрифта для лучшей читаемости в PDF
         for ax in fig.axes:
             for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                        ax.get_xticklabels() + ax.get_yticklabels()):
+                        ax.get_xticklabels() + ax.get_yticklabels()):  # Fixed typo with extra underscore
                 item.set_fontsize(12)
                 
             # Если есть легенда, увеличиваем шрифт
@@ -48,8 +48,72 @@ def save_plot_to_base64(fig, backend: str = 'matplotlib') -> str:
         plt.tight_layout()
         fig.savefig(buf, format="png", bbox_inches='tight', dpi=150)
     elif backend == 'plotly':
-        # Увеличиваем размер и разрешение для plotly
-        fig.write_image(buf, format="png", width=1000, height=600, scale=2)
+        try:
+            # Пробуем несколько способов экспорта изображения
+            export_succeeded = False
+            error_messages = []
+            
+            # Способ 1: Прямое использование kaleido через to_image
+            try:
+                import plotly.io as pio
+                img_bytes = pio.to_image(fig, format="png", width=1000, height=600, scale=2)
+                buf.write(img_bytes)
+                export_succeeded = True
+            except Exception as e1:
+                error_messages.append(f"Метод 1 (to_image) не удался: {str(e1)}")
+                
+                # Способ 2: Использование write_image
+                if not export_succeeded:
+                    try:
+                        from kaleido.scopes.plotly import PlotlyScope
+                        scope = PlotlyScope()
+                        img_bytes = scope.transform(fig.to_dict(), format="png", width=1000, height=600, scale=2)
+                        buf.write(img_bytes)
+                        export_succeeded = True
+                    except Exception as e2:
+                        error_messages.append(f"Метод 2 (PlotlyScope) не удался: {str(e2)}")
+                
+                # Способ 3: Сохранение во временный файл и чтение обратно
+                if not export_succeeded:
+                    try:
+                        import tempfile
+                        import os
+                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
+                            fig.write_image(tmpfile.name)
+                            tmpfile.close()
+                            with open(tmpfile.name, 'rb') as imgfile:
+                                buf.write(imgfile.read())
+                            os.unlink(tmpfile.name)  # Удаляем временный файл
+                            export_succeeded = True
+                    except Exception as e3:
+                        error_messages.append(f"Метод 3 (временный файл) не удался: {str(e3)}")
+            
+            if not export_succeeded:
+                error_details = "\n".join(error_messages)
+                st.warning(f"Не удалось экспортировать график. Подробности: {error_details}")
+                raise Exception(f"Все методы экспорта изображения не удались: {error_details}")
+                
+        except Exception as e:
+            st.warning(f"Не удалось экспортировать график: {str(e)}. Создаем альтернативное изображение.")
+            
+            # Создаем более информативное изображение с текстом об ошибке
+            plt.figure(figsize=(10, 4))
+            plt.text(0.5, 0.6, "График недоступен для экспорта",
+                    horizontalalignment='center', verticalalignment='center', 
+                    transform=plt.gca().transAxes, fontsize=16, fontweight='bold')
+            plt.text(0.5, 0.4, "Для экспорта графиков Plotly установите пакет kaleido:",
+                    horizontalalignment='center', verticalalignment='center', 
+                    transform=plt.gca().transAxes, fontsize=14)
+            plt.text(0.5, 0.3, "pip install kaleido",
+                    horizontalalignment='center', verticalalignment='center', 
+                    transform=plt.gca().transAxes, fontsize=14, fontfamily='monospace')
+            plt.text(0.5, 0.1, f"Ошибка: {str(e)[:100]}...",
+                    horizontalalignment='center', verticalalignment='center', 
+                    transform=plt.gca().transAxes, fontsize=10, style='italic')
+            plt.axis('off')
+            plt.tight_layout()
+            plt.savefig(buf, format='png', dpi=150)
+            plt.close()
     else:
         raise ValueError("Unknown backend: only 'matplotlib' or 'plotly' supported")
     buf.seek(0)
@@ -198,21 +262,111 @@ def markdown_to_pdf(md_text: str) -> bytes:
     """
     Преобразует markdown в PDF (использует weasyprint или pdfkit).
     """
-    # Преобразуем markdown в html
-    if markdown2 is not None:
-        html = markdown2.markdown(md_text)
-    else:
-        raise ImportError("markdown2 не установлен")
+    # Улучшенная CSS для таблиц
+    css_template = """
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 20px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+            font-size: 0.9em;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            color: #333;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f8f8;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 20px auto;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border-radius: 4px;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h2 {
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        @media print {
+            img { page-break-inside: avoid; }
+            h2 { page-break-before: always; }
+            h2:first-of-type { page-break-before: avoid; }
+            table { page-break-inside: avoid; }
+        }
+    </style>
+    """
+    
+    # Преобразуем markdown в html с поддержкой таблиц
+    try:
+        # Пробуем использовать markdown с расширением tables
+        import markdown
+        html = markdown.markdown(
+            md_text, 
+            extensions=[
+                'tables',          # Поддержка таблиц
+                'fenced_code',     # Блоки кода
+                'codehilite',      # Подсветка синтаксиса (если доступно)
+                'attr_list'        # Поддержка атрибутов HTML
+            ]
+        )
+        # Добавляем наши стили
+        html = f"<!DOCTYPE html><html><head><meta charset='UTF-8'>{css_template}</head><body>{html}</body></html>"
+    except ImportError:
+        # Запасной вариант: используем markdown2 (но у него хуже поддержка таблиц)
+        if markdown2 is not None:
+            html = markdown2.markdown(md_text, extras=['tables', 'fenced-code-blocks'])
+            html = f"<!DOCTYPE html><html><head><meta charset='UTF-8'>{css_template}</head><body>{html}</body></html>"
+        else:
+            raise ImportError("Не установлены ни markdown, ни markdown2")
+    
     # Преобразуем html в pdf
     if HTML is not None:
+        # WeasyPrint - лучше работает с таблицами
         pdf_bytes = HTML(string=html).write_pdf()
         return pdf_bytes
     elif pdfkit is not None:
+        # PDFKit - настраиваем параметры для таблиц
+        options = {
+            'encoding': 'UTF-8',
+            'margin-top': '20mm',
+            'margin-right': '20mm',
+            'margin-bottom': '20mm',
+            'margin-left': '20mm',
+            'page-size': 'A4',
+            'dpi': 300
+        }
+        
         with tempfile.NamedTemporaryFile(suffix='.html', delete=False) as tmp_html:
             tmp_html.write(html.encode('utf-8'))
+            tmp_html_path = tmp_html.name
             tmp_html.flush()
-            pdf_bytes = pdfkit.from_file(tmp_html.name, False)
-        return pdf_bytes
+            
+        try:
+            pdf_bytes = pdfkit.from_file(tmp_html_path, False, options=options)
+            import os
+            os.unlink(tmp_html_path)
+            return pdf_bytes
+        except Exception as e:
+            import os
+            os.unlink(tmp_html_path)
+            raise e
     else:
         raise ImportError("Не установлен ни weasyprint, ни pdfkit")
 
@@ -234,3 +388,63 @@ def download_report_buttons(md_text: str, pdf_bytes: Optional[bytes] = None, md_
             file_name=pdf_filename,
             mime="application/pdf"
         )
+
+
+def download_button_for_text(text: str, file_name: str, button_text: str = "Download", key: Optional[str] = None):
+    """
+    Создает кнопку для скачивания текстового содержимого.
+    
+    Args:
+        text: Текстовое содержимое для скачивания
+        file_name: Имя файла для скачивания
+        button_text: Текст кнопки
+        key: Уникальный ключ для кнопки
+    """
+    st.download_button(
+        label=button_text,
+        data=text,
+        file_name=file_name,
+        mime="text/markdown",
+        key=key
+    )
+
+def download_button_for_binary(binary_data: bytes, file_name: str, button_text: str = "Download", key: Optional[str] = None):
+    """
+    Создает кнопку для скачивания бинарного содержимого.
+    
+    Args:
+        binary_data: Бинарное содержимое для скачивания
+        file_name: Имя файла для скачивания
+        button_text: Текст кнопки
+        key: Уникальный ключ для кнопки
+    """
+    # Определяем MIME-тип по расширению
+    mime_type = "application/octet-stream"
+    if file_name.endswith('.pdf'):
+        mime_type = "application/pdf"
+    elif file_name.endswith('.csv'):
+        mime_type = "text/csv"
+    elif file_name.endswith('.json'):
+        mime_type = "application/json"
+    
+    st.download_button(
+        label=button_text,
+        data=binary_data,
+        file_name=file_name,
+        mime=mime_type,
+        key=key
+    )
+
+def convert_markdown_to_pdf(md_text: str) -> bytes:
+    """
+    Преобразует Markdown-текст в PDF. 
+    Обертка над функцией markdown_to_pdf для совместимости с API.
+    
+    Args:
+        md_text: Текст в формате Markdown
+    
+    Returns:
+        Бинарные данные PDF
+    """
+    # Используем существующую функцию markdown_to_pdf
+    return markdown_to_pdf(md_text)

@@ -18,10 +18,17 @@ from modules.anomaly_module import (
     detect_plateau,
     evaluate_anomaly_detection,
     create_true_anomaly_mask,
-    run_parameter_experiment,     # Новая функция для экспериментов
-    get_default_parameter_ranges,  # Новая функция для получения диапазонов параметров
-    suggest_optimal_parameters     # Новая функция для рекомендации параметров
+    run_parameter_experiment,
+    get_default_parameter_ranges,
+    suggest_optimal_parameters,
+    # Add these three functions for report generation
+    prepare_anomaly_report_data,
+    generate_anomaly_detection_yaml,
+    format_anomaly_info_for_report
 )
+
+# Импортируем модуль отчетов
+import modules.reporting as reporting
 
 # Инициализация состояния сессии
 if 'anomalies' not in st.session_state:
@@ -97,8 +104,8 @@ with st.sidebar:
     # Точечные аномалии
     with st.expander("➕ Точечные аномалии"):
         point_indices = st.text_input("Индексы (через запятую)", key="point_indices")
-        point_amp_min = st.number_input("Минимальная амплитуда", 0.1, 5.0, 1.0, key="point_amp_min")
-        point_amp_max = st.number_input("Максимальная амплитуда", 0.1, 5.0, 2.0, key="point_amp_max")
+        point_amp_min = st.number_input("Минимальная амплитуда", 0.1, 100.0, 1.0, key="point_amp_min")
+        point_amp_max = st.number_input("Максимальная амплитуда", 0.1, 100.0, 2.0, key="point_amp_max")
         point_direction = st.radio("Направление", ["Вверх", "Вниз"], key="point_dir")
         
         if st.button("Добавить точечные аномалии"):
@@ -137,7 +144,7 @@ with st.sidebar:
         ext_start = st.number_input("Начальный индекс", 0, max_idx, min(80, max_idx), key="ext_start")
         ext_duration = st.number_input("Длительность", 1, min(100, max_idx - ext_start + 1), 
                                        min(25, max_idx - ext_start + 1), key="ext_dur")
-        ext_shift = st.number_input("Смещение уровня", -5.0, 5.0, -2.5, key="ext_shift")
+        ext_shift = st.number_input("Смещение уровня", -100.0, 100.0, -2.5, key="ext_shift")
         
         if st.button("Добавить протяженную аномалию"):
             new_anom = {
@@ -1365,7 +1372,7 @@ if has_injected_anomalies:
                         * Меньшие значения → больше коротких плато будет обнаружено
                         * Большие значения → только длинные плато
                         """)
-    
+
     # Расчет количества экспериментов и оценка сложности
     num_experiments = np.prod([len(values) for values in param_ranges.values()])
     
@@ -1714,5 +1721,599 @@ if has_injected_anomalies:
             )
         else:
             st.info("Нет результатов экспериментов. Запустите эксперимент на вкладке 'Настройка эксперимента'.")
-else:
-    st.info("Для проведения численного эксперимента необходимо добавить аномалии в данные.")
+
+# ====================
+# ОТЧЕТЫ
+# ====================
+st.subheader("📊 Отчеты и экспорт результатов")
+
+# Define this function outside any try block
+def create_matplotlib_figure_from_plotly(plotly_fig, width=10, height=6):
+    """
+    Преобразует график Plotly в график Matplotlib для более надежного экспорта
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    # Создаем новую фигуру Matplotlib
+    fig, ax = plt.subplots(figsize=(width, height))
+    
+    # Перебираем все трейсы из plotly и добавляем их в matplotlib
+    for trace in plotly_fig.data:
+        # Получаем данные и свойства
+        x_data = trace.x if hasattr(trace, 'x') and trace.x is not None else []
+        y_data = trace.y if hasattr(trace, 'y') and trace.y is not None else []
+        
+        # Пропускаем пустые трейсы
+        if len(x_data) == 0 or len(y_data) == 0:
+            continue
+            
+        name = trace.name if hasattr(trace, 'name') else 'Series'
+        mode = trace.mode if hasattr(trace, 'mode') else 'lines'
+        
+        # Определяем стиль линии
+        linestyle = '-'
+        if hasattr(trace, 'line') and hasattr(trace.line, 'dash'):
+            if trace.line.dash == 'dash':
+                linestyle = '--'
+            elif trace.line.dash == 'dot':
+                linestyle = ':'
+        
+        # Определяем цвет
+        color = 'blue'
+        if hasattr(trace, 'marker') and hasattr(trace.marker, 'color'):
+            color = trace.marker.color
+        elif hasattr(trace, 'line') and hasattr(trace.line, 'color'):
+            color = trace.line.color
+            
+        # Рисуем в зависимости от режима
+        if 'lines' in mode and 'markers' in mode:
+            ax.plot(x_data, y_data, label=name, linestyle=linestyle, marker='o', color=color)
+        elif 'lines' in mode:
+            ax.plot(x_data, y_data, label=name, linestyle=linestyle, color=color)
+        elif 'markers' in mode:
+            ax.scatter(x_data, y_data, label=name, color=color)
+    
+    # Настраиваем заголовок и метки осей
+    if hasattr(plotly_fig.layout, 'title') and hasattr(plotly_fig.layout.title, 'text'):
+        ax.set_title(plotly_fig.layout.title.text)
+    
+    if hasattr(plotly_fig.layout, 'xaxis') and hasattr(plotly_fig.layout.xaxis, 'title') and hasattr(plotly_fig.layout.xaxis.title, 'text'):
+        ax.set_xlabel(plotly_fig.layout.xaxis.title.text)
+        
+    if hasattr(plotly_fig.layout, 'yaxis') and hasattr(plotly_fig.layout.yaxis, 'title') and hasattr(plotly_fig.layout.yaxis.title, 'text'):
+        ax.set_ylabel(plotly_fig.layout.yaxis.title.text)
+    
+    # Добавляем горизонтальные и вертикальные линии, если они есть
+    if hasattr(plotly_fig, 'layout') and hasattr(plotly_fig.layout, 'shapes'):
+        for shape in plotly_fig.layout.shapes:
+            if shape.type == 'line':
+                if shape.y0 == shape.y1:  # горизонтальная линия
+                    ax.axhline(y=shape.y0, color='green', linestyle='--', alpha=0.5)
+                elif shape.x0 == shape.x1:  # вертикальная линия
+                    ax.axvline(x=shape.x0, color='red', linestyle='--', alpha=0.5)
+    
+    # Добавляем легенду
+    if len(ax.get_lines()) > 0 or len(ax.collections) > 0:
+        ax.legend(loc='best')
+    
+    # Настраиваем сетку для лучшей читаемости
+    ax.grid(True, linestyle='-', alpha=0.3)
+    
+    # Улучшаем внешний вид
+    plt.tight_layout()
+    
+    return fig
+
+with st.expander("Сформировать отчет об аномалиях", expanded=False):
+    st.write("### Отчет об обнаружении аномалий")
+    
+    # Выбор типа отчета
+    report_type = st.radio(
+        "Тип отчета",
+        ["Базовый отчет", "Подробный отчет с метриками", "Отчет по экспериментам"],
+        horizontal=True,
+        help="Выберите тип отчета для генерации"
+    )
+    
+    if st.button("Сформировать отчет", type="primary"):
+        try:
+            with st.spinner("Формирование отчета..."):
+                # Подготовка основных данных для отчета
+                detection_params = {
+                    "z_score": {
+                        "enabled": use_zscore,
+                        "threshold": z_threshold if 'z_threshold' in locals() else 3.0
+                    },
+                    "hampel": {
+                        "enabled": use_hampel,
+                        "window": hampel_window if 'hampel_window' in locals() else 0,
+                        "sigma": hampel_sigma if 'hampel_sigma' in locals() else 3.0,
+                        "adaptive_window": hampel_adaptive if 'hampel_adaptive' in locals() else True,
+                        "window_percent": hampel_window_percent if 'hampel_window_percent' in locals() else 0.5
+                    },
+                    "iqr": {
+                        "enabled": use_iqr,
+                        "multiplier": iqr_multiplier if 'iqr_multiplier' in locals() else 1.5
+                    },
+                    "plateau": {
+                        "enabled": use_plateau,
+                        "threshold": plateau_threshold if 'plateau_threshold' in locals() else 0.001,
+                        "min_duration": plateau_duration if 'plateau_duration' in locals() else 10,
+                        "detect_nan": detect_nan if 'detect_nan' in locals() else True
+                    }
+                }
+                
+                # Преобразуем информацию об аномалиях в подходящий формат
+                if data_source == "Синтетические данные":
+                    anomaly_information = metadata
+                else:
+                    anomaly_information = metadata if 'metadata' in locals() else []
+                
+                # Получаем метрики, если есть информация о внедренных аномалиях
+                metrics_data = None
+                if has_injected_anomalies and 'metrics_results' in locals():
+                    metrics_data = metrics_results
+                
+                # Данные экспериментов, если проводились
+                experiment_data = None
+                optimal_params_data = None
+                if 'experiment_results' in st.session_state:
+                    experiment_data = st.session_state.experiment_results
+                    if 'optimal_params' in locals():
+                        optimal_params_data = optimal_params
+                
+                # Подготавливаем данные для отчета
+                report_data = prepare_anomaly_report_data(
+                    data=df['data'].values,
+                    time_index=df['time'].values,
+                    anomaly_info=anomaly_information,
+                    detection_results=anomalies,
+                    detection_params=detection_params,
+                    metrics_results=metrics_data,
+                    experiment_results=experiment_data,
+                    optimal_params=optimal_params_data
+                )
+                
+                # Генерируем YAML
+                yaml_section = generate_anomaly_detection_yaml(report_data)
+                
+                # Генерируем CSS
+                css = """<style>
+                img { 
+                    display: block; 
+                    margin: 20px auto; 
+                    max-width: 100%; 
+                    height: auto; 
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    border-radius: 4px;
+                }
+                table {
+                    border-collapse: collapse;
+                    width: 100%;
+                    margin-bottom: 20px;
+                }
+                th, td {
+                    padding: 8px;
+                    text-align: left;
+                    border-bottom: 1px solid #ddd;
+                }
+                th {
+                    background-color: #f2f2f2;
+                }
+                @media print {
+                    img {
+                        max-width: 100%;
+                        page-break-inside: avoid;
+                    }
+                    h2 { 
+                        page-break-before: always; 
+                    }
+                    h2:first-of-type { 
+                        page-break-before: avoid; 
+                    }
+                }
+                </style>"""
+                
+                # Начало формирования отчета
+                md_content = f"{yaml_section}{css}\n"
+                md_content += "# Отчет по обнаружению аномалий во временных рядах\n\n"
+                
+                # Описательная часть
+                md_content += "## Общая информация\n\n"
+                md_content += f"* **Источник данных**: {data_source}\n"
+                md_content += f"* **Длина ряда**: {len(df)}\n"
+                md_content += f"* **Наличие пропусков**: {'Да' if report_data['has_nan'] else 'Нет'}\n\n"
+                
+                md_content += "## Статистики данных\n\n"
+                md_content += "| Показатель | Значение |\n"
+                md_content += "|------------|--------|\n"
+                for key, value in report_data['data_stats'].items():
+                    md_content += f"| {key} | {value:.4f} |\n"
+                
+                # Информация о параметрах обнаружения
+                md_content += "## Параметры обнаружения аномалий\n\n"
+                
+                # Z-Score
+                md_content += "### Z-Score\n\n"
+                z_params = report_data['detection_params']['z_score']
+                md_content += f"* **Включен**: {'Да' if z_params['enabled'] else 'Нет'}\n"
+                if z_params['enabled']:
+                    md_content += f"* **Порог**: {z_params['threshold']}\n\n"
+                
+                # Hampel
+                md_content += "### Фильтр Хампеля\n\n"
+                h_params = report_data['detection_params']['hampel']
+                md_content += f"* **Включен**: {'Да' if h_params['enabled'] else 'Нет'}\n"
+                if h_params['enabled']:
+                    md_content += f"* **Адаптивное окно**: {'Да' if h_params['adaptive_window'] else 'Нет'}\n"
+                    if h_params['adaptive_window']:
+                        md_content += f"* **Процент от длины ряда**: {h_params['window_percent']}%\n"
+                    else:
+                        md_content += f"* **Размер окна**: {h_params['window']} точек\n"
+                    md_content += f"* **Коэффициент чувствительности**: {h_params['sigma']}\n\n"
+                
+                # IQR
+                md_content += "### Межквартильный размах (IQR)\n\n"
+                iqr_params = report_data['detection_params']['iqr']
+                md_content += f"* **Включен**: {'Да' if iqr_params['enabled'] else 'Нет'}\n"
+                if iqr_params['enabled']:
+                    md_content += f"* **Множитель**: {iqr_params['multiplier']}\n\n"
+                
+                # Plateau
+                md_content += "### Обнаружение плато\n\n"
+                p_params = report_data['detection_params']['plateau']
+                md_content += f"* **Включен**: {'Да' if p_params['enabled'] else 'Нет'}\n"
+                if p_params['enabled']:
+                    md_content += f"* **Порог производной**: {p_params['threshold']}\n"
+                    md_content += f"* **Минимальная длительность**: {p_params['min_duration']} точек\n"
+                    md_content += f"* **Обнаружение NaN**: {'Да' if p_params['detect_nan'] else 'Нет'}\n\n"
+                
+                # Информация о внедренных аномалиях
+                if anomaly_information:
+                    md_content += format_anomaly_info_for_report(anomaly_information)
+                
+                # Результаты обнаружения
+                md_content += "## Результаты обнаружения аномалий\n\n"
+                
+                md_content += "| Метод | Количество аномалий | Процент от ряда |\n"
+                md_content += "|-------|-------------------|---------------|\n"
+                
+                for method, results in report_data['detection_results'].items():
+                    method_name = method_names.get(method, method)
+                    md_content += f"| {method_name} | {results['count']} | {results['percentage']:.2f}% |\n"
+                
+                md_content += "\n"
+                
+                # График аномалий
+                # Сохраняем текущий график в base64 только если есть обнаруженные аномалии
+                has_detected_anomalies = any(np.any(result) for name, result in anomalies.items() if name != 'iqr_bounds' and isinstance(result, np.ndarray))
+
+                if 'fig' in locals() and has_detected_anomalies:
+                    try:
+                        # Пробуем сначала сохранить напрямую
+                        anomaly_img_base64 = reporting.save_plot_to_base64(fig, backend='plotly')
+                        md_content += "## График обнаруженных аномалий\n\n"
+                        md_content += f"<img src=\"data:image/png;base64,{anomaly_img_base64}\" alt=\"Обнаруженные аномалии\">\n\n"
+                    except Exception as e:
+                        st.warning(f"Прямой экспорт графика не удался: {str(e)}. Пробуем альтернативный метод.")
+                        try:
+                            # Создаем эквивалентный график в matplotlib
+                            mpl_fig = create_matplotlib_figure_from_plotly(fig)
+                            anomaly_img_base64 = reporting.save_plot_to_base64(mpl_fig, backend='matplotlib')
+                            md_content += "## График обнаруженных аномалий\n\n"
+                            md_content += f"<img src=\"data:image/png;base64,{anomaly_img_base64}\" alt=\"Обнаруженные аномалии\">\n\n"
+                        except Exception as e2:
+                            st.error(f"Оба метода экспорта графика не удались: {str(e2)}")
+                            md_content += "## График обнаруженных аномалий\n\n"
+                            md_content += "График недоступен из-за технических проблем с экспортом.\n\n"
+                else:
+                    md_content += "## График обнаруженных аномалий\n\n"
+                    md_content += "Не было обнаружено значимых аномалий для отображения на графике.\n\n"
+
+                # Если выбран подробный отчет с метриками
+                if report_type == "Подробный отчет с метриками" and metrics_data:
+                    md_content += "## Метрики качества обнаружения аномалий\n\n"
+                    
+                    md_content += "| Метод | Precision | Recall | F1-Score |\n"
+                    md_content += "|-------|-----------|--------|----------|\n"
+                    
+                    for method, metrics in metrics_data.items():
+                        method_name = method_names.get(method, method)
+                        precision = metrics.get('precision', 0)
+                        recall = metrics.get('recall', 0)
+                        f1 = metrics.get('f1', 0)
+                        md_content += f"| {method_name} | {precision:.3f} | {recall:.3f} | {f1:.3f} |\n"
+                    
+                    md_content += "\n"
+                    
+                    # Добавляем график сравнения метрик, если есть
+                    if 'fig_metrics' in locals() and len(metrics_data) > 0:
+                        try:
+                            metrics_img_base64 = reporting.save_plot_to_base64(fig_metrics, backend='plotly')
+                            md_content += "## График сравнения метрик\n\n"
+                            md_content += f"<img src=\"data:image/png;base64,{metrics_img_base64}\" alt=\"Сравнение метрик\">\n\n"
+                        except Exception as e:
+                            st.warning(f"Не удалось добавить график метрик в отчет: {str(e)}")
+                            md_content += "## График сравнения метрик\n\n"
+                            md_content += "График недоступен. Установите пакет kaleido для экспорта графиков в PDF.\n\n"
+
+                # Если выбран отчет по экспериментам
+                if report_type == "Отчет по экспериментам" and experiment_data is not None:
+                    md_content += "## Результаты численного эксперимента\n\n"
+                    
+                    # Информация о методе и параметрах эксперимента
+                    method_display_name = {
+                        "z_score": "Z-Score",
+                        "iqr": "IQR (Межквартильный размах)",
+                        "hampel": "Фильтр Хампеля",
+                        "plateau": "Детекция плато"
+                    }.get(st.session_state.experiment_method, st.session_state.experiment_method)
+                    
+                    md_content += f"### Метод: {method_display_name}\n\n"
+                    md_content += f"#### Всего экспериментов: {len(experiment_data)}\n\n"
+                    
+                    # Добавляем информацию о диапазонах параметров
+                    md_content += "### Диапазоны исследуемых параметров\n\n"
+                    md_content += "| Параметр | Минимум | Максимум | Шаг | Количество значений |\n"
+                    md_content += "|----------|---------|---------|-----|-------------------|\n"
+                    
+                    param_ranges = {}
+                    for param in st.session_state.experiment_params:
+                        values = experiment_data[param].unique()
+                        values.sort()
+                        if len(values) > 1:
+                            min_val = values[0]
+                            max_val = values[-1]
+                            
+                            # Пытаемся определить шаг для числовых параметров
+                            if len(values) > 2 and all(isinstance(x, (int, float)) for x in values):
+                                step = (values[1] - values[0])
+                                is_uniform = all(abs((values[i] - values[i-1]) - step) < 1e-6 for i in range(1, len(values)))
+                                if is_uniform:
+                                    step_display = f"{step}"
+                                else:
+                                    step_display = "неравномерный"
+                            else:
+                                step_display = "-"
+                                
+                            md_content += f"| {param} | {min_val} | {max_val} | {step_display} | {len(values)} |\n"
+                            param_ranges[param] = values
+                    
+                    md_content += "\n"
+                    
+                    # Добавляем информацию о фиксированных параметрах, если они были
+                    fixed_params = {}
+                    for column in experiment_data.columns:
+                        if column not in st.session_state.experiment_params and column not in ['precision', 'recall', 'f1', 'num_anomalies']:
+                            values = experiment_data[column].unique()
+                            if len(values) == 1:
+                                fixed_params[column] = values[0]
+                    
+                    if fixed_params:
+                        md_content += "### Фиксированные параметры\n\n"
+                        md_content += "| Параметр | Значение |\n"
+                        md_content += "|----------|----------|\n"
+                        for param, value in fixed_params.items():
+                            md_content += f"| {param} | {value} |\n"
+                        md_content += "\n"
+                    
+                    # Лучшие результаты для каждой метрики
+                    md_content += "### Лучшие результаты по метрикам\n\n"
+                    
+                    # Для F1-Score
+                    best_f1_idx = experiment_data['f1'].idxmax()
+                    best_f1 = experiment_data.loc[best_f1_idx]
+                    
+                    md_content += "#### Лучший результат по F1-Score\n\n"
+                    md_content += f"**F1-Score: {best_f1['f1']:.4f}**\n\n"
+                    md_content += "| Параметр | Значение |\n"
+                    md_content += "|----------|----------|\n"
+                    
+                    for param in st.session_state.experiment_params:
+                        md_content += f"| {param} | {best_f1[param]} |\n"
+                    
+                    md_content += f"| Precision | {best_f1['precision']:.4f} |\n"
+                    md_content += f"| Recall | {best_f1['recall']:.4f} |\n"
+                    num_anomalies_f1 = best_f1['num_anomalies']
+                    if isinstance(num_anomalies_f1, (pd.Series, np.ndarray)):
+                        num_anomalies_f1 = num_anomalies_f1.item() if hasattr(num_anomalies_f1, 'item') else int(num_anomalies_f1[0])
+                    md_content += f"| Количество аномалий | {int(num_anomalies_f1)} |\n\n"
+                    
+                    # Для Precision
+                    best_precision_idx = experiment_data['precision'].idxmax()
+                    best_precision = experiment_data.loc[best_precision_idx]
+                    
+                    md_content += "#### Лучший результат по Precision\n\n"
+                    md_content += f"**Precision: {best_precision['precision']:.4f}**\n\n"
+                    md_content += "| Параметр | Значение |\n"
+                    md_content += "|----------|----------|\n"
+                    
+                    for param in st.session_state.experiment_params:
+                        md_content += f"| {param} | {best_precision[param]} |\n"
+                    
+                    md_content += f"| F1-Score | {best_precision['f1']:.4f} |\n"
+                    md_content += f"| Recall | {best_precision['recall']:.4f} |\n"
+                    num_anomalies_precision = best_precision['num_anomalies']
+                    if isinstance(num_anomalies_precision, (pd.Series, np.ndarray)):
+                        num_anomalies_precision = num_anomalies_precision.item() if hasattr(num_anomalies_precision, 'item') else int(num_anomalies_precision[0])
+                    md_content += f"| Количество аномалий | {int(num_anomalies_precision)} |\n\n"
+                    
+                    # Для Recall
+                    best_recall_idx = experiment_data['recall'].idxmax()
+                    best_recall = experiment_data.loc[best_recall_idx]
+                    
+                    md_content += "#### Лучший результат по Recall\n\n"
+                    md_content += f"**Recall: {best_recall['recall']:.4f}**\n\n"
+                    md_content += "| Параметр | Значение |\n"
+                    md_content += "|----------|----------|\n"
+                    
+                    for param in st.session_state.experiment_params:
+                        md_content += f"| {param} | {best_recall[param]} |\n"
+                    
+                    md_content += f"| F1-Score | {best_recall['f1']:.4f} |\n"
+                    md_content += f"| Precision | {best_recall['precision']:.4f} |\n"
+                    num_anomalies_recall = best_recall['num_anomalies']
+                    if isinstance(num_anomalies_recall, (pd.Series, np.ndarray)):
+                        num_anomalies_recall = num_anomalies_recall.item() if hasattr(num_anomalies_recall, 'item') else int(num_anomalies_recall[0])
+                    md_content += f"| Количество аномалий | {int(num_anomalies_recall)} |\n\n"
+
+                    # Создание и добавление графиков для всех метрик
+                    metrics_to_visualize = ['f1', 'precision', 'recall', 'num_anomalies']
+                    metric_titles = {
+                        'f1': 'F1-Score',
+                        'precision': 'Precision',
+                        'recall': 'Recall',
+                        'num_anomalies': 'Количество аномалий'
+                    }
+                    
+                    md_content += "### Визуализация результатов\n\n"
+                    
+                    # Если у нас один параметр - создаем линейные графики для каждой метрики
+                    if len(st.session_state.experiment_params) == 1:
+                        param = st.session_state.experiment_params[0]
+                        
+                        for metric in metrics_to_visualize:
+                            try:
+                                # Создаем matplotlib график для линейной зависимости
+                                plt.figure(figsize=(10, 6))
+                                
+                                # Сортируем данные по параметру
+                                sorted_data = experiment_data.sort_values(param)
+                                
+                                # Строим график
+                                plt.plot(sorted_data[param], sorted_data[metric], 'o-', linewidth=2)
+                                
+                                # Добавляем подписи и сетку
+                                plt.title(f'Зависимость {metric_titles[metric]} от {param}')
+                                plt.xlabel(param)
+                                plt.ylabel(metric_titles[metric])
+                                plt.grid(True, alpha=0.3)
+                                plt.tight_layout()
+                                
+                                # Сохраняем в base64
+                                img_base64 = reporting.save_plot_to_base64(plt.gcf(), backend='matplotlib')
+                                plt.close()
+                                
+                                # Добавляем в отчет
+                                md_content += f"#### Зависимость {metric_titles[metric]} от {param}\n\n"
+                                md_content += f"<img src=\"data:image/png;base64,{img_base64}\" alt=\"{metric_titles[metric]} vs {param}\">\n\n"
+                            except Exception as e:
+                                md_content += f"#### Зависимость {metric_titles[metric]} от {param}\n\n"
+                                md_content += f"Не удалось создать график: {str(e)}\n\n"
+                    
+                    # Если у нас два параметра - создаем тепловые карты для каждой метрики
+                    elif len(st.session_state.experiment_params) == 2:
+                        param1, param2 = st.session_state.experiment_params
+                        
+                        for metric in metrics_to_visualize:
+                            try:
+                                # Создаем сводную таблицу для тепловой карты
+                                pivot_df = experiment_data.pivot(index=param1, columns=param2, values=metric)
+                                
+                                # Создаем matplotlib тепловую карту
+                                plt.figure(figsize=(12, 8))
+                                im = plt.imshow(pivot_df.values, cmap='viridis', aspect='auto')
+                                plt.colorbar(im, label=f"{metric_titles[metric]} (среднее)")
+                                
+                                # Настраиваем оси
+                                plt.xticks(range(len(pivot_df.columns)), pivot_df.columns, rotation=45)
+                                plt.yticks(range(len(pivot_df.index)), pivot_df.index)
+                                
+                                plt.xlabel(param2)
+                                plt.ylabel(param1)
+                                plt.title(f'Тепловая карта {metric_titles[metric]} (усреднено)')
+                                plt.tight_layout()
+                                
+                                # Сохраняем в base64
+                                img_base64 = reporting.save_plot_to_base64(plt.gcf(), backend='matplotlib')
+                                plt.close()
+                                
+                                # Добавляем в отчет
+                                md_content += f"#### Тепловая карта {metric_titles[metric]} (по {param1} и {param2})\n\n"
+                                md_content += f"<img src=\"data:image/png;base64,{img_base64}\" alt=\"Heatmap {metric}\">\n\n"
+                            except Exception as e:
+                                md_content += f"#### Тепловая карта {metric_titles[metric]}\n\n"
+                                md_content += f"Не удалось создать тепловую карту: {str(e)}\n\n"
+                    
+                    # Для многомерных экспериментов (3+ параметра)
+                    else:
+                        # Выбираем два параметра для визуализации (первые два)
+                        viz_params = st.session_state.experiment_params[:2]
+                        param1, param2 = viz_params
+                        
+                        # Показываем предупреждение
+                        md_content += "⚠️ *Эксперимент содержит больше двух параметров. Показаны две первые переменные, остальные параметры усреднены.*\n\n"
+                        
+                        for metric in metrics_to_visualize:
+                            try:
+                                # Группируем данные по двум параметрам и усредняем метрику
+                                grouped_data = experiment_data.groupby([param1, param2])[metric].mean().reset_index()
+                                pivot_df = grouped_data.pivot(index=param1, columns=param2, values=metric)
+                                
+                                # Создаем matplotlib тепловую карту
+                                plt.figure(figsize=(12, 8))
+                                im = plt.imshow(pivot_df.values, cmap='viridis', aspect='auto')
+                                plt.colorbar(im, label=f"{metric_titles[metric]} (среднее)")
+                                
+                                # Настраиваем оси
+                                plt.xticks(range(len(pivot_df.columns)), pivot_df.columns, rotation=45)
+                                plt.yticks(range(len(pivot_df.index)), pivot_df.index)
+                                
+                                plt.xlabel(param2)
+                                plt.ylabel(param1)
+                                plt.title(f'Тепловая карта {metric_titles[metric]} (усреднено)')
+                                plt.tight_layout()
+                                
+                                # Сохраняем в base64
+                                img_base64 = reporting.save_plot_to_base64(plt.gcf(), backend='matplotlib')
+                                plt.close()
+                                
+                                # Добавляем в отчет
+                                md_content += f"#### Тепловая карта {metric_titles[metric]} (по {param1} и {param2})\n\n"
+                                md_content += f"<img src=\"data:image/png;base64,{img_base64}\" alt=\"Heatmap {metric}\">\n\n"
+                            except Exception as e:
+                                md_content += f"#### Тепловая карта {metric_titles[metric]}\n\n"
+                                md_content += f"Не удалось создать тепловую карту: {str(e)}\n\n"
+                    
+                    # Добавляем полную таблицу результатов
+                    md_content += "### Полная таблица результатов (10 лучших по F1-Score)\n\n"
+                    
+                    # Сортируем по F1-Score и берем 10 лучших результатов
+                    top_results = experiment_data.sort_values('f1', ascending=False).head(10)
+                    
+                    # Создаем заголовок таблицы
+                    md_content += "| № |"
+                    for param in st.session_state.experiment_params:
+                        md_content += f" {param} |"
+                    md_content += " F1-Score | Precision | Recall | Кол-во аномалий |\n"
+                    
+                    # Добавляем разделительную строку
+                    md_content += "|---|"
+                    for _ in st.session_state.experiment_params:
+                        md_content += "---|"
+                    md_content += "---|---|---|---|\n"
+                    
+                    # Добавляем данные
+                    for i, (_, row) in enumerate(top_results.iterrows(), 1):
+                        md_content += f"| {i} |"
+                        for param in st.session_state.experiment_params:
+                            md_content += f" {row[param]} |"
+                        md_content += f" {row['f1']:.4f} | {row['precision']:.4f} | {row['recall']:.4f} | {int(row['num_anomalies'])} |\n"
+                                    
+                    # Генерируем отчет
+                    file_name = f"anomaly_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.md"
+                    reporting.download_button_for_text(md_content, file_name, "⬇️ Скачать отчет (Markdown)")
+                    
+                    # Пытаемся конвертировать в PDF если доступен pdfkit
+                    try:
+                        pdf_file_name = file_name.replace('.md', '.pdf')
+                        pdf_content = reporting.convert_markdown_to_pdf(md_content)
+                        reporting.download_button_for_binary(pdf_content, pdf_file_name, "⬇️ Скачать отчет (PDF)")
+                    except Exception as pdf_error:
+                        st.warning(f"Не удалось создать PDF: {str(pdf_error)}. Скачайте версию в формате Markdown.")
+        except Exception as e:
+            st.error(f"Ошибка при создании отчета: {str(e)}")
+            st.error("Подробности ошибки: " + "\n".join(str(e).split("\n")[:5]))
+    else:
+        st.info("Нет результатов экспериментов. Запустите эксперимент на вкладке 'Настройка эксперимента'.")
