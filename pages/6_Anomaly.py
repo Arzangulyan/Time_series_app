@@ -1414,6 +1414,8 @@ if has_injected_anomalies:
             st.session_state.experiment_results = experiment_results
             st.session_state.experiment_method = internal_method
             st.session_state.experiment_params = list(param_ranges.keys())
+            # Store the actual parameter ranges to use in the report
+            st.session_state.experiment_param_ranges = param_ranges
             
             # Переключаемся на вкладку результатов
             st.success("Эксперимент завершен! Перейдите на вкладку 'Результаты' для просмотра.")
@@ -1614,6 +1616,7 @@ if has_injected_anomalies:
                         for param in other_params:
                             unique_values = sorted(results_df[param].unique())
                             if len(unique_values) <= 10:  # Если не слишком много уникальных значений
+                               
                                 filter_value = st.selectbox(
                                     f"Значение для {param}:",
                                     options=unique_values,
@@ -2058,27 +2061,47 @@ with st.expander("Сформировать отчет об аномалиях", 
                     md_content += "| Параметр | Минимум | Максимум | Шаг | Количество значений |\n"
                     md_content += "|----------|---------|---------|-----|-------------------|\n"
                     
-                    param_ranges = {}
-                    for param in st.session_state.experiment_params:
-                        values = experiment_data[param].unique()
-                        values.sort()
-                        if len(values) > 1:
-                            min_val = values[0]
-                            max_val = values[-1]
-                            
-                            # Пытаемся определить шаг для числовых параметров
-                            if len(values) > 2 and all(isinstance(x, (int, float)) for x in values):
-                                step = (values[1] - values[0])
-                                is_uniform = all(abs((values[i] - values[i-1]) - step) < 1e-6 for i in range(1, len(values)))
-                                if is_uniform:
-                                    step_display = f"{step}"
-                                else:
-                                    step_display = "неравномерный"
-                            else:
-                                step_display = "-"
+                    # Use the stored parameter ranges instead of reconstructing them
+                    if 'experiment_param_ranges' in st.session_state:
+                        for param, values in st.session_state.experiment_param_ranges.items():
+                            if len(values) > 1:
+                                min_val = values[0]
+                                max_val = values[-1]
                                 
-                            md_content += f"| {param} | {min_val} | {max_val} | {step_display} | {len(values)} |\n"
-                            param_ranges[param] = values
+                                # Try to determine if values are evenly spaced
+                                if len(values) > 2 and all(isinstance(x, (int, float)) for x in values):
+                                    step = (values[1] - values[0])
+                                    is_uniform = all(abs((values[i] - values[i-1]) - step) < 1e-6 for i in range(1, len(values)))
+                                    if is_uniform:
+                                        step_display = f"{step}"
+                                    else:
+                                        step_display = "неравномерный"
+                                else:
+                                    step_display = "-"
+                                    
+                                md_content += f"| {param} | {min_val} | {max_val} | {step_display} | {len(values)} |\n"
+                    else:
+                        # Fallback to the old method if param_ranges aren't stored
+                        param_ranges = {}
+                        for param in st.session_state.experiment_params:
+                            values = experiment_data[param].unique()
+                            values.sort()
+                            if len(values) > 1:
+                                min_val = values[0]
+                                max_val = values[-1]
+                                
+                                # Пытаемся определить шаг для числовых параметров
+                                if len(values) > 2 and all(isinstance(x, (int, float)) for x in values):
+                                    step = (values[1] - values[0])
+                                    is_uniform = all(abs((values[i] - values[i-1]) - step) < 1e-6 for i in range(1, len(values)))
+                                    if is_uniform:
+                                        step_display = f"{step}"
+                                    else:
+                                        step_display = "неравномерный"
+                                else:
+                                    step_display = "-"
+                                    
+                                md_content += f"| {param} | {min_val} | {max_val} | {step_display} | {len(values)} |\n"
                     
                     md_content += "\n"
                     
@@ -2136,7 +2159,7 @@ with st.expander("Сформировать отчет об аномалиях", 
                     md_content += f"| Recall | {best_precision['recall']:.4f} |\n"
                     num_anomalies_precision = best_precision['num_anomalies']
                     if isinstance(num_anomalies_precision, (pd.Series, np.ndarray)):
-                        num_anomalies_precision = num_anomalies_precision.item() if hasattr(num_anomalies_precision, 'item') else int(num_anomalies_precision[0])
+                        num_anomalies_precision = num_anomalииs_precision.item() if hasattr(num_anomalies_precision, 'item') else int(num_anomalies_precision[0])
                     md_content += f"| Количество аномалий | {int(num_anomalies_precision)} |\n\n"
                     
                     # Для Recall
@@ -2155,7 +2178,7 @@ with st.expander("Сформировать отчет об аномалиях", 
                     md_content += f"| Precision | {best_recall['precision']:.4f} |\n"
                     num_anomalies_recall = best_recall['num_anomalies']
                     if isinstance(num_anomalies_recall, (pd.Series, np.ndarray)):
-                        num_anomalies_recall = num_anomalies_recall.item() if hasattr(num_anomalies_recall, 'item') else int(num_anomalies_recall[0])
+                        num_anomalies_recall = num_anomalииs_recall.item() if hasattr(num_anomalies_recall, 'item') else int(num_anomalies_recall[0])
                     md_content += f"| Количество аномалий | {int(num_anomalies_recall)} |\n\n"
 
                     # Создание и добавление графиков для всех метрик
