@@ -997,19 +997,25 @@ if has_injected_anomalies:
                             opacity=0.7
                         ))
                         
-                        # Добавляем истинные аномалии (обозначение на фоне)
+                        # Добавляем истинные аномалии - используем вертикальные линии вместо прямоугольников
                         if np.any(true_anomaly_mask):
                             idx = np.where(true_anomaly_mask)[0]
                             true_x = df.iloc[idx]['time']
-                            # Создаем зоны истинных аномалий
-                            for i in range(len(true_x)):
-                                fig_detection.add_vrect(
-                                    x0=true_x.iloc[i] - 0.1,
-                                    x1=true_x.iloc[i] + 0.1,
-                                    fillcolor="rgba(220, 220, 220, 0.3)",
-                                    layer="below",
-                                    line_width=0
-                                )
+                            
+                            # Добавляем отметки истинных аномалий
+                            fig_detection.add_trace(go.Scatter(
+                                x=true_x,
+                                y=df.iloc[idx]['data'],
+                                mode='markers',
+                                name='Истинные аномалии',
+                                marker=dict(
+                                    color='gray',
+                                    size=12,
+                                    symbol='circle-open',
+                                    line=dict(width=2, color='gray')
+                                ),
+                                opacity=0.7
+                            ))
                         
                         # True Positives (верно обнаруженные)
                         if np.any(tp_mask):
@@ -2159,7 +2165,7 @@ with st.expander("Сформировать отчет об аномалиях", 
                     md_content += f"| Recall | {best_precision['recall']:.4f} |\n"
                     num_anomalies_precision = best_precision['num_anomalies']
                     if isinstance(num_anomalies_precision, (pd.Series, np.ndarray)):
-                        num_anomalies_precision = num_anomalииs_precision.item() if hasattr(num_anomalies_precision, 'item') else int(num_anomalies_precision[0])
+                        num_anomalies_precision = num_anomalииs_precision.item() if hasattr(num_anomalииs_precision, 'item') else int(num_anomalииs_precision[0])
                     md_content += f"| Количество аномалий | {int(num_anomalies_precision)} |\n\n"
                     
                     # Для Recall
@@ -2178,7 +2184,7 @@ with st.expander("Сформировать отчет об аномалиях", 
                     md_content += f"| Precision | {best_recall['precision']:.4f} |\n"
                     num_anomalies_recall = best_recall['num_anomalies']
                     if isinstance(num_anomalies_recall, (pd.Series, np.ndarray)):
-                        num_anomalies_recall = num_anomalииs_recall.item() if hasattr(num_anomalies_recall, 'item') else int(num_anomalies_recall[0])
+                        num_anomalies_recall = num_anomalииs_recall.item() if hasattr(num_anomalииs_recall, 'item') else int(num_anomalииs_recall[0])
                     md_content += f"| Количество аномалий | {int(num_anomalies_recall)} |\n\n"
 
                     # Создание и добавление графиков для всех метрик
