@@ -28,6 +28,12 @@ import tensorflow as tf
 import time
 import modules.reporting as reporting
 from modules.lstm.visualization import plot_train_test_results_matplotlib
+# Импорт унифицированных графиков
+from modules.visualization.unified_plots import (
+    create_unified_forecast_plot_plotly,
+    create_unified_forecast_plot_matplotlib,
+    create_simple_time_series_plot
+)
 
 warnings.filterwarnings("ignore", category=UserWarning, module="keras")
 
@@ -79,20 +85,9 @@ def main():
     # Отображение временного ряда
     st.subheader("Исходный временной ряд")
     
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=time_series.index,
-        y=time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series,
-        mode="lines",
-        name="Временной ряд"
-    ))
-    
-    fig.update_layout(
-        xaxis_title="Время",
-        yaxis_title="Значение",
-        height=400
-    )
-    
+    # Используем унифицированный график
+    ts_series = time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series
+    fig = create_simple_time_series_plot(ts_series, title="Исходный временной ряд")
     st.plotly_chart(fig, use_container_width=True)
     
     # Боковая панель с параметрами
@@ -378,60 +373,131 @@ def main():
         
         # Проверяем наличие необходимых ключей для построения графика
         if all(key in results for key in ['original_series', 'train_predictions', 'test_predictions']):
-            # Создаем график с результатами (plotly для Streamlit)
-            fig = plot_train_test_results(
+            # Используем унифицированный график для plotly
+            fig = create_unified_forecast_plot_plotly(
                 original_series=results['original_series'],
-                train_pred=results['train_predictions'],
-                test_pred=results['test_predictions'],
-                title="Результаты прогнозирования LSTM"
-            )
-            fig.update_layout(
+                train_predictions=results['train_predictions'],
+                test_predictions=results['test_predictions'],
+                future_predictions=results.get('future_predictions'),
+                title="Результаты прогнозирования LSTM",
                 height=500
             )
             st.plotly_chart(fig, use_container_width=True)
-            # --- Секция: СКАЧАТЬ ОТЧЕТ ---
-            # График прогноза (matplotlib -> base64)
-            forecast_fig = plot_train_test_results_matplotlib(
-                results['original_series'],
-                results['train_predictions'],
-                results['test_predictions'],
-                title="Результаты прогнозирования LSTM"
+            
+            # Создание и скачивание CSV с результатами моделирования
+            st.markdown("### 📊 Экспорт данных")
+            
+            # Создаем сводную таблицу с результатами
+            export_data = pd.DataFrame(index=results['original_series'].index)
+            export_data['Исходные_данные'] = results['original_series'].values
+            
+            # Определяем границы обучающей и тестовой выборок по индексам прогнозов
+            train_indices = results['train_predictions'].index if results['train_predictions'] is not None else []
+            test_indices = results['test_predictions'].index if results['test_predictions'] is not None else []
+            
+            # Отмечаем принадлежность к обучающей/тестовой выборке
+            export_data['Тип_данных'] = 'Данные'
+            if len(train_indices) > 0:
+                export_data.loc[train_indices, 'Тип_данных'] = 'Обучение'
+            if len(test_indices) > 0:
+                export_data.loc[test_indices, 'Тип_данных'] = 'Тест'
+            
+            # Добавляем прогнозы LSTM
+            export_data['Прогноз_обучение'] = np.nan
+            export_data['Прогноз_тест'] = np.nan
+            
+            if results['train_predictions'] is not None:
+                export_data.loc[results['train_predictions'].index, 'Прогноз_обучение'] = results['train_predictions'].values
+            
+            if results['test_predictions'] is not None:
+                export_data.loc[results['test_predictions'].index, 'Прогноз_тест'] = results['test_predictions'].values
+            
+            # Добавляем будущие прогнозы, если есть
+            if results.get('future_predictions') is not None:
+                future_preds = results['future_predictions']
+                # Расширяем DataFrame для будущих дат
+                future_df = pd.DataFrame(index=future_preds.index)
+                future_df['Исходные_данные'] = np.nan
+                future_df['Тип_данных'] = 'Прогноз'
+                future_df['Прогноз_обучение'] = np.nan
+                future_df['Прогноз_тест'] = np.nan
+                future_df['Прогноз_будущее'] = future_preds.values
+                
+                # Объединяем с основными данными
+                export_data = pd.concat([export_data, future_df])
+            
+            if 'Прогноз_будущее' not in export_data.columns:
+                export_data['Прогноз_будущее'] = np.nan
+            
+            # Добавляем остатки (ошибки прогноза) только для имеющихся данных
+            if results['train_predictions'] is not None:
+                export_data['Остатки_обучение'] = np.nan
+                train_actual = results['original_series'].loc[results['train_predictions'].index]
+                train_residuals = train_actual - results['train_predictions']
+                export_data.loc[results['train_predictions'].index, 'Остатки_обучение'] = train_residuals.values
+            
+            if results['test_predictions'] is not None:
+                export_data['Остатки_тест'] = np.nan
+                test_actual = results['original_series'].loc[results['test_predictions'].index]
+                test_residuals = test_actual - results['test_predictions']
+                export_data.loc[results['test_predictions'].index, 'Остатки_тест'] = test_residuals.values
+            
+            # Добавляем абсолютные ошибки
+            if results['train_predictions'] is not None:
+                export_data['Абс_ошибка_обучение'] = np.nan
+                train_actual = results['original_series'].loc[results['train_predictions'].index]
+                abs_errors_train = np.abs(train_actual - results['train_predictions'])
+                export_data.loc[results['train_predictions'].index, 'Абс_ошибка_обучение'] = abs_errors_train.values
+            
+            if results['test_predictions'] is not None:
+                export_data['Абс_ошибка_тест'] = np.nan
+                test_actual = results['original_series'].loc[results['test_predictions'].index]
+                abs_errors_test = np.abs(test_actual - results['test_predictions'])
+                export_data.loc[results['test_predictions'].index, 'Абс_ошибка_тест'] = abs_errors_test.values
+            
+            # Сортируем по индексу для правильного порядка
+            export_data = export_data.sort_index()
+            
+            # Предварительный просмотр данных
+            st.markdown("**Предварительный просмотр данных для экспорта:**")
+            st.dataframe(export_data.head(10), use_container_width=True)
+            
+            # Кнопка скачивания
+            csv_export = export_data.to_csv(index=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            st.download_button(
+                label="📥 Скачать данные моделирования (CSV)",
+                data=csv_export,
+                file_name=f"lstm_modeling_results_{timestamp}.csv",
+                mime="text/csv",
+                help="Скачать CSV файл со всеми данными: исходные значения, прогнозы, остатки, ошибки"
             )
-            forecast_img_base64 = reporting.save_plot_to_base64(forecast_fig, backend='matplotlib')
-            # График потерь (matplotlib -> base64)
-            if 'history' in results:
-                loss_fig = plot_training_history(results['history'])
-                loss_img_base64 = reporting.save_plot_to_base64(loss_fig, backend='matplotlib')
-            else:
-                loss_img_base64 = ''
-            # Описание и параметры
-            description = "Прогнозирование временного ряда с помощью LSTM."
-            params = {
-                'Размер обучающей выборки': train_size,
-                'Длина входной последовательности': sequence_length,
-                'Сложность модели': model_complexity,
-                'Количество эпох': epochs,
-                'Шаги прогноза вперед': forecast_steps
-            }
-            md_report = reporting.generate_markdown_report(
-                title="Отчет по эксперименту LSTM",
-                description=description,
-                metrics_train=results['train_metrics'],
-                metrics_test=results['test_metrics'],
-                train_time=results.get('train_time', 0),
-                forecast_img_base64=forecast_img_base64,
-                loss_img_base64=loss_img_base64,
-                params=params,
-                early_stopping=results.get('early_stopping', False),
-                early_stopping_epoch=results.get('early_stopping_epoch')
-            )
-            # Генерируем PDF (если возможно)
-            try:
-                pdf_bytes = reporting.markdown_to_pdf(md_report)
-            except Exception as e:
-                pdf_bytes = None
-                st.warning(f"Не удалось сгенерировать PDF: {e}")
-            reporting.download_report_buttons(md_report, pdf_bytes, md_filename="lstm_report.md", pdf_filename="lstm_report.pdf")
+            
+            # Информация о содержимом файла
+            with st.expander("📋 Описание столбцов в CSV файле"):
+                st.markdown("""
+                **Столбцы в экспортируемом файле:**
+                
+                - **Индекс** - временные метки (дата/время)
+                - **Исходные_данные** - оригинальные значения временного ряда
+                - **Тип_данных** - тип данных ('Обучение', 'Тест', 'Прогноз', 'Данные')
+                - **Прогноз_обучение** - прогнозы LSTM модели на обучающей выборке
+                - **Прогноз_тест** - прогнозы LSTM модели на тестовой выборке
+                - **Прогноз_будущее** - прогнозы на будущие периоды (если есть)
+                - **Остатки_обучение** - разность между реальными и прогнозными значениями (обучение)
+                - **Остатки_тест** - разность между реальными и прогнозными значениями (тест)
+                - **Абс_ошибка_обучение** - абсолютная ошибка прогноза (обучение)
+                - **Абс_ошибка_тест** - абсолютная ошибка прогноза (тест)
+                
+                **Применение:** Эти данные можно использовать для:
+                - Построения собственных графиков и визуализаций
+                - Расчета дополнительных метрик качества
+                - Анализа остатков и выбросов
+                - Импорта в другие аналитические системы (R, Excel, Tableau и др.)
+                - Сравнения с результатами других моделей
+                """)
+
             # --- Конец секции отчета ---
         else:
             st.warning("Не удалось отобразить график прогнозирования из-за отсутствия необходимых данных.")
@@ -447,8 +513,15 @@ def main():
                     # Создаём индекс для будущих дат
                     future_index = create_future_index(results['original_series'].index, int(forecast_steps))
                     future_preds = pd.Series(future_preds.values, index=future_index)
-                    # График прогноза
-                    st.plotly_chart(plot_forecast(results['original_series'], future_preds, title="Прогноз на будущее (LSTM)"), use_container_width=True)
+                    
+                    # Используем унифицированный график прогноза
+                    future_fig = create_unified_forecast_plot_plotly(
+                        original_series=results['original_series'],
+                        future_predictions=future_preds,
+                        title="Прогноз на будущее (LSTM)"
+                    )
+                    st.plotly_chart(future_fig, use_container_width=True)
+                    
                     # Таблица прогноза
                     st.dataframe(pd.DataFrame({'Прогнозируемое значение': future_preds}))
                     # Кнопка для скачивания
@@ -462,6 +535,7 @@ def main():
                     )
                 except Exception as e:
                     st.error(f"Ошибка при прогнозе в будущее: {str(e)}")
+    
     # Если модель еще не обучена, покажем инструкции
     else:
         st.info("Выберите режим настройки и нажмите 'Запустить обучение' для начала анализа.")

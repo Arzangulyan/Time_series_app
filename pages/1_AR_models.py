@@ -51,6 +51,13 @@ from modules.page_template import (
 import modules.reporting as reporting
 from modules.utils import nothing_selected
 
+# Импорт унифицированных графиков
+from modules.visualization.unified_plots import (
+    create_unified_forecast_plot_plotly,
+    create_unified_forecast_plot_matplotlib,
+    create_simple_time_series_plot
+)
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -434,20 +441,10 @@ def main():
         st.error("Не удалось загрузить временной ряд. Пожалуйста, убедитесь, что данные загружены корректно.")
         return
     
-    # Отображаем исходный ряд
+    # Отображаем исходный ряд с унифицированным графиком
     st.subheader("Исходный временной ряд")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=time_series.index,
-        y=time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series,
-        mode="lines",
-        name="Временной ряд"
-    ))
-    fig.update_layout(
-        xaxis_title="Время",
-        yaxis_title="Значение",
-        height=400
-    )
+    ts_series = time_series.iloc[:, 0] if isinstance(time_series, pd.DataFrame) else time_series
+    fig = create_simple_time_series_plot(ts_series, title="Исходный временной ряд")
     st.plotly_chart(fig, use_container_width=True)
     
     # Боковая панель с параметрами
@@ -902,7 +899,6 @@ def main():
                         
                         # Format metrics with all available metrics
                         consolidated_md += "### Метрики\n\n"
-                        # ...existing code...
                         for metric_name, nice_name in [
                             ('r2', 'R²'), ('adj_r2', 'Adjusted R²'), ('mse', 'MSE'),
                             ('rmse', 'RMSE'), ('mae', 'MAE'), ('mape', 'MAPE'),
@@ -1137,78 +1133,107 @@ def main():
         
         # Проверяем наличие необходимых ключей для построения графика
         if all(key in results for key in ['original_series', 'train', 'test', 'test_predictions']):
-            # Создаем график с результатами (plotly для Streamlit)
-            fig = plot_forecast_plotly(
-                model=st.session_state.ar_model,
-                steps=len(results['test']),
-                original_data=results['original_series'],
+            # Создаем прогнозы на обучающей выборке для полного отображения
+            train_predictions = None
+            if st.session_state.ar_model and hasattr(st.session_state.ar_model, 'predict_in_sample'):
+                try:
+                    train_predictions = st.session_state.ar_model.predict_in_sample()
+                except:
+                    train_predictions = None
+            
+            # Используем унифицированный график для plotly
+            fig = create_unified_forecast_plot_plotly(
+                original_series=results['original_series'],
+                train_predictions=train_predictions,
+                test_predictions=results['test_predictions'],
                 train_data=results['train'],
                 test_data=results['test'],
-                title="Результаты прогнозирования"
-            )
-            fig.update_layout(
+                title="Результаты прогнозирования",
                 height=500
             )
             st.plotly_chart(fig, use_container_width=True)
             
-            # --- Секция: СКАЧАТЬ ОТЧЕТ ---
-            # График прогноза (matplotlib -> base64)
-            forecast_fig = plot_forecast_matplotlib(
-                model=st.session_state.ar_model,
-                steps=len(results['test']),
-                original_data=results['original_series'],
-                train_data=st.session_state.ar_results['train'],
-                test_data=st.session_state.ar_results['test'],
-                title="Результаты прогнозирования"
+            # Создание и скачивание CSV с результатами моделирования
+            st.markdown("### 📊 Экспорт данных")
+            
+            # Создаем сводную таблицу с результатами
+            export_data = pd.DataFrame(index=results['original_series'].index)
+            export_data['Исходные_данные'] = results['original_series'].values
+            
+            # Отмечаем принадлежность к обучающей/тестовой выборке
+            export_data['Тип_данных'] = 'Обучение'
+            if 'test' in results and len(results['test']) > 0:
+                test_indices = results['test'].index
+                export_data.loc[test_indices, 'Тип_данных'] = 'Тест'
+            
+            # Добавляем прогнозы на обучающей выборке
+            if train_predictions is not None:
+                export_data['Прогноз_обучение'] = np.nan
+                export_data.loc[train_predictions.index, 'Прогноз_обучение'] = train_predictions.values
+            
+            # Добавляем прогнозы на тестовой выборке
+            if 'test_predictions' in results and results['test_predictions'] is not None:
+                export_data['Прогноз_тест'] = np.nan
+                export_data.loc[results['test_predictions'].index, 'Прогноз_тест'] = results['test_predictions'].values
+            
+            # Добавляем остатки (ошибки прогноза)
+            if train_predictions is not None:
+                export_data['Остатки_обучение'] = np.nan
+                train_residuals = results['train'].loc[train_predictions.index] - train_predictions
+                export_data.loc[train_predictions.index, 'Остатки_обучение'] = train_residuals.values
+            
+            if 'test_predictions' in results and results['test_predictions'] is not None:
+                export_data['Остатки_тест'] = np.nan
+                test_residuals = results['test'].loc[results['test_predictions'].index] - results['test_predictions']
+                export_data.loc[results['test_predictions'].index, 'Остатки_тест'] = test_residuals.values
+            
+            # Добавляем абсолютные ошибки
+            if train_predictions is not None:
+                export_data['Абс_ошибка_обучение'] = np.nan
+                abs_errors_train = np.abs(results['train'].loc[train_predictions.index] - train_predictions)
+                export_data.loc[train_predictions.index, 'Абс_ошибка_обучение'] = abs_errors_train.values
+            
+            if 'test_predictions' in results and results['test_predictions'] is not None:
+                export_data['Абс_ошибка_тест'] = np.nan
+                abs_errors_test = np.abs(results['test'].loc[results['test_predictions'].index] - results['test_predictions'])
+                export_data.loc[results['test_predictions'].index, 'Абс_ошибка_тест'] = abs_errors_test.values
+            
+            # Предварительный просмотр данных
+            st.markdown("**Предварительный просмотр данных для экспорта:**")
+            st.dataframe(export_data.head(10), use_container_width=True)
+            
+            # Кнопка скачивания
+            csv_export = export_data.to_csv(index=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_name = results.get('model_info', 'ARIMA').replace(' ', '_').replace('(', '').replace(')', '').replace(',', '')
+            
+            st.download_button(
+                label="📥 Скачать данные моделирования (CSV)",
+                data=csv_export,
+                file_name=f"arima_modeling_results_{model_name}_{timestamp}.csv",
+                mime="text/csv",
+                help="Скачать CSV файл со всеми данными: исходные значения, прогнозы, остатки, ошибки"
             )
-            forecast_img_base64 = reporting.save_plot_to_base64(forecast_fig, backend='matplotlib')
             
-            # Создаем пустой график для потерь (не применимо к ARIMA/SARIMA)
-            loss_fig, ax = plt.subplots(figsize=(8, 4))
-            ax.text(0.5, 0.5, "Для авторегрессионных моделей график потерь не применим", 
-                   ha='center', va='center', fontsize=12)
-            ax.set_axis_off()
-            loss_img_base64 = reporting.save_plot_to_base64(loss_fig, backend='matplotlib')
-            
-            # Описание и параметры
-            description = f"Прогнозирование временного ряда с помощью авторрегрессионной модели {results['model_info']}."
-            params = {
-                'Размер обучающей выборки': train_size,
-                'Тип модели': st.session_state.ar_model.__class__.__name__,
-            }
-            # Добавляем параметры модели
-            params.update(results['params'])
-            
-            md_report = reporting.generate_markdown_report(
-                title="Отчет по эксперименту авторрегрессионной модели",
-                description=description,
-                metrics_train=results['train_metrics'],
-                metrics_test=results['test_metrics'],
-                train_time=results['train_time'],
-                forecast_img_base64=forecast_img_base64,
-                loss_img_base64=loss_img_base64,
-                params=params,
-                early_stopping=False,
-                early_stopping_epoch=None
-            )
-            
-            # Генерируем PDF (если возможно)
-            try:
-                pdf_bytes = reporting.markdown_to_pdf(md_report)
-            except Exception as e:
-                pdf_bytes = None
-                st.warning(f"Не удалось сгенерировать PDF: {e}")
-            
-            reporting.download_report_buttons(
-                md_report, 
-                pdf_bytes, 
-                md_filename="arima_report.md", 
-                pdf_filename="arima_report.pdf"
-            )
-            # --- Конец секции отчета ---
-        else:
-            st.warning("Не удалось отобразить график прогнозирования из-за отсутствия необходимых данных.")
-        
+            # Информация о содержимом файла
+            with st.expander("📋 Описание столбцов в CSV файле"):
+                st.markdown("""
+                **Столбцы в экспортируемом файле:**
+                
+                - **Индекс** - временные метки (дата/время)
+                - **Исходные_данные** - оригинальные значения временного ряда
+                - **Тип_данных** - принадлежность к обучающей выборке ('Обучение') или тестовой ('Тест')
+                - **Прогноз_обучение** - прогнозы модели на обучающей выборке
+                - **Прогноз_тест** - прогнозы модели на тестовой выборке
+                - **Остатки_обучение** - разность между реальными и прогнозными значениями (обучение)
+                - **Остатки_тест** - разность между реальными и прогнозными значениями (тест)
+                - **Абс_ошибка_обучение** - абсолютная ошибка прогноза (обучение)
+                - **Абс_ошибка_тест** - абсолютная ошибка прогноза (тест)
+                
+                **Применение:** Эти данные можно использовать для дополнительного анализа, построения 
+                собственных графиков, расчета дополнительных метрик или импорта в другие аналитические системы.
+                """)
+
         # СЕКЦИЯ: Прогноз в будущее по уже обученной модели
         if st.session_state.ar_model is not None:
             st.subheader("Прогноз на будущее по обученной модели")
@@ -1219,11 +1244,10 @@ def main():
                 try:
                     future_preds = st.session_state.ar_model.predict(steps=int(future_steps))
                     
-                    # График прогноза
-                    future_fig = plot_forecast_plotly(
-                        model=st.session_state.ar_model,
-                        steps=int(future_steps),
-                        original_data=results['original_series'],
+                    # Используем унифицированный график прогноза
+                    future_fig = create_unified_forecast_plot_plotly(
+                        original_series=results['original_series'],
+                        future_predictions=future_preds,
                         train_data=results['train'],
                         title="Прогноз на будущее"
                     )
