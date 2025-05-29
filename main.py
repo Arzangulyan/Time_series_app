@@ -77,6 +77,95 @@ def load_csv_data(uploaded_file):
         logging.exception("Критическая ошибка чтения CSV:") # Используем exception для полного трейсбека
         return None
 
+@st.cache_data
+def generate_predefined_synthetic_data(dataset_name):
+    """Генерирует заранее определенные синтетические временные ряды."""
+    logging.info(f"Генерация готового синтетического ряда: {dataset_name}")
+    
+    # Базовые параметры для всех рядов
+    base_date = '2023-01-01'
+    base_value = 100
+    
+    if dataset_name == "Линейный тренд с сезонностью":
+        size = 365
+        time_index = pd.to_datetime(pd.date_range(start=base_date, periods=size, freq='D'))
+        time_numeric = np.arange(size)
+        
+        trend = 0.2 * time_numeric
+        seasonality = 15 * np.sin(2 * np.pi * time_numeric / 365) + 5 * np.sin(2 * np.pi * time_numeric / 30)
+        noise = np.random.normal(0, 3, size)
+        values = base_value + trend + seasonality + noise
+        
+    elif dataset_name == "Экспоненциальный рост":
+        size = 200
+        time_index = pd.to_datetime(pd.date_range(start=base_date, periods=size, freq='D'))
+        time_numeric = np.arange(size)
+        
+        exponential = base_value * np.exp(0.01 * time_numeric)
+        seasonality = 10 * np.sin(2 * np.pi * time_numeric / 50)
+        noise = np.random.normal(0, exponential * 0.05)
+        values = exponential + seasonality + noise
+        
+    elif dataset_name == "Ряд с аномалиями":
+        size = 300
+        time_index = pd.to_datetime(pd.date_range(start=base_date, periods=size, freq='D'))
+        time_numeric = np.arange(size)
+        
+        trend = 0.1 * time_numeric
+        seasonality = 20 * np.sin(2 * np.pi * time_numeric / 60)
+        noise = np.random.normal(0, 5, size)
+        values = base_value + trend + seasonality + noise
+        
+        # Добавляем аномалии
+        anomaly_indices = np.random.choice(size, size//20, replace=False)
+        values[anomaly_indices] += np.random.normal(0, 50, len(anomaly_indices))
+        
+    elif dataset_name == "Ступенчатая функция":
+        size = 250
+        time_index = pd.to_datetime(pd.date_range(start=base_date, periods=size, freq='D'))
+        time_numeric = np.arange(size)
+        
+        # Создаем ступенчатую функцию
+        steps = np.where(time_numeric < 100, base_value, 
+                np.where(time_numeric < 150, base_value + 30,
+                np.where(time_numeric < 200, base_value + 50, base_value + 20)))
+        seasonality = 8 * np.sin(2 * np.pi * time_numeric / 40)
+        noise = np.random.normal(0, 4, size)
+        values = steps + seasonality + noise
+        
+    elif dataset_name == "Недельная сезонность":
+        size = 168  # 24 недели по 7 дней
+        time_index = pd.to_datetime(pd.date_range(start=base_date, periods=size, freq='D'))
+        time_numeric = np.arange(size)
+        
+        trend = 0.05 * time_numeric
+        weekly_pattern = 25 * np.sin(2 * np.pi * time_numeric / 7)  # Недельная сезонность
+        monthly_pattern = 10 * np.sin(2 * np.pi * time_numeric / 30)  # Месячная сезонность
+        noise = np.random.normal(0, 6, size)
+        values = base_value + trend + weekly_pattern + monthly_pattern + noise
+        
+    elif dataset_name == "Случайное блуждание":
+        size = 400
+        time_index = pd.to_datetime(pd.date_range(start=base_date, periods=size, freq='D'))
+        
+        # Случайное блуждание
+        changes = np.random.normal(0, 5, size)
+        values = base_value + np.cumsum(changes)
+        
+    else:  # Дефолтный случай
+        size = 365
+        time_index = pd.to_datetime(pd.date_range(start=base_date, periods=size, freq='D'))
+        time_numeric = np.arange(size)
+        
+        trend = 0.1 * time_numeric
+        seasonality = 10 * np.sin(2 * np.pi * time_numeric / 365)
+        noise = np.random.normal(0, 5, size)
+        values = base_value + trend + seasonality + noise
+    
+    df = pd.DataFrame({'Timestamp': time_index, 'Value': values})
+    logging.info(f"Сгенерирован готовый синтетический ряд '{dataset_name}' размером: {df.shape}")
+    return df
+
 # --- Инициализация Session State ---
 # Хранит данные МЕЖДУ перезапусками скрипта
 if 'data' not in st.session_state:
@@ -152,7 +241,7 @@ st.header("1. Загрузка или генерация данных")
 
 data_source = st.radio(
     "Выберите источник данных:",
-    ('Загрузить CSV', 'Сгенерировать синтетические данные'),
+    ('Загрузить CSV', 'Сгенерировать синтетические данные', 'Выбрать готовый синтетический ряд'),
     key='data_source_radio',
     # При смене источника сбрасываем данные
     on_change=lambda: st.session_state.update(time_series=None, data=None, time_col=None, value_col=None, main_column=None)
@@ -216,6 +305,41 @@ elif data_source == 'Сгенерировать синтетические да�
         st.session_state.last_gen_params = gen_params 
         logging.info("Сгенерированные данные сохранены в session_state.")
         st.session_state.uploaded_filename = None
+        st.rerun()
+
+elif data_source == 'Выбрать готовый синтетический ряд':
+    st.subheader("Выберите готовый синтетический ряд:")
+    
+    predefined_datasets = {
+        "Линейный тренд с сезонностью": "Годовая и месячная сезонность с восходящим трендом",
+        "Экспоненциальный рост": "Экспоненциальный рост с недельной сезонностью",
+        "Ряд с аномалиями": "Тренд с сезонностью и случайными выбросами",
+        "Ступенчатая функция": "Скачкообразные изменения уровня",
+        "Недельная сезонность": "Ярко выраженная недельная периодичность",
+        "Случайное блуждание": "Случайное блуждание без тренда"
+    }
+    
+    selected_dataset = st.selectbox(
+        "Выберите тип ряда:",
+        options=list(predefined_datasets.keys()),
+        key='predefined_dataset_select',
+        help="Каждый ряд имеет уникальные характеристики для анализа"
+    )
+    
+    # Показываем описание выбранного ряда
+    if selected_dataset in predefined_datasets:
+        st.info(f"**{selected_dataset}**: {predefined_datasets[selected_dataset]}")
+    
+    # Генерируем данные при изменении выбора или нажатии кнопки
+    current_predefined_choice = st.session_state.get('last_predefined_dataset')
+    
+    if st.button("Загрузить выбранный ряд", key='load_predefined_button') or current_predefined_choice != selected_dataset:
+        df_predefined = generate_predefined_synthetic_data(selected_dataset)
+        st.session_state.data = df_predefined.copy()
+        st.session_state.time_series = df_predefined.copy()
+        st.session_state.last_predefined_dataset = selected_dataset
+        st.session_state.uploaded_filename = None
+        logging.info(f"Загружен готовый синтетический ряд '{selected_dataset}' в session_state.")
         st.rerun()
 
 # --- Проверка наличия данных для обработки ---
@@ -286,21 +410,11 @@ else:
 st.header("2. Предварительный просмотр данных")
 st.write(f"Текущие данные (размер: {current_df.shape}):")
 st.dataframe(current_df.head())
-# st.write("Последние 5 строк текущих данных:")
-# st.dataframe(current_df.tail())
 logging.info(f"Шаг 2: Предварительный просмотр. Размер данных: {current_df.shape}")
 
 
 # --- Шаг 3: Выбор столбцов (Время и Значение) ---
 st.header("3. Выбор столбцов для анализа")
-
-# !!! ОТЛАДКА: Выводим типы данных текущего DataFrame В НАЧАЛЕ ШАГА 3 !!!
-st.write("Типы данных в `current_df` перед выбором (начало Шага 3):")
-st.dataframe(current_df.dtypes.astype(str))
-# !!! ОТЛАДКА: Логируем колонки и типы в терминал В НАЧАЛЕ ШАГА 3 !!!
-logging.info(f"--- Шаг 3 Начало ---")
-logging.info(f"Колонки в current_df (из state): {current_df.columns.tolist()}")
-logging.info(f"Типы данных в current_df (из state):\\n{current_df.dtypes}")
 
 # Эти переменные будут определены в блоках if/else ниже
 time_col = st.session_state.get('time_col')
@@ -319,10 +433,6 @@ if is_datetime_index:
     if not value_col_options_step3:
         st.error("В данных не найдено числовых столбцов для анализа.")
         st.stop()
-
-    # !!! ОТЛАДКА: Логируем доступные опции (индекс datetime) !!!
-    logging.info(f"Шаг 3: Колонки, предложенные для выбора значения (индекс datetime): {value_col_options_step3}")
-    st.write("Доступные числовые колонки для выбора (индекс уже datetime):", value_col_options_step3)
 
     # Выбираем столбец значений
     current_value_col_step3 = st.session_state.get('value_col', value_col_options_step3[0])
@@ -374,10 +484,6 @@ else:
     if not value_col_options_step3:
         st.error(f"Не найдено числовых столбцов для анализа (кроме '{time_col}').")
         st.stop()
-
-    # !!! ОТЛАДКА: Логируем доступные опции (индекс НЕ datetime) !!!
-    logging.info(f"Шаг 3: Колонки, предложенные для выбора значения (индекс НЕ datetime, после исключения '{time_col}'): {value_col_options_step3}")
-    st.write(f"Доступные числовые колонки для выбора (после исключения '{time_col}'):", value_col_options_step3)
 
     current_value_col_step3 = st.session_state.get('value_col', value_col_options_step3[0])
     if current_value_col_step3 not in value_col_options_step3: current_value_col_step3 = value_col_options_step3[0]
