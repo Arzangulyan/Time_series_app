@@ -431,6 +431,385 @@ def make_future_forecast(model, data, steps, title=None):
         return future_fig, future_df
 
 
+def display_auto_tuning_experiments():
+    """Отображает результаты автоматического подбора параметров."""
+    experiments_count = len(st.session_state.auto_tuning_experiments) if st.session_state.auto_tuning_experiments else 0
+    logger.info(f"Display function called - auto_tuning_experiments count: {experiments_count}")
+    
+    if not st.session_state.auto_tuning_experiments or len(st.session_state.auto_tuning_experiments) == 0:
+        # Debug information when experiments are not available
+        experiments_exists = 'auto_tuning_experiments' in st.session_state
+        experiments_length = len(st.session_state.auto_tuning_experiments) if experiments_exists else 0
+        
+        logger.info(f"No experiments to display: exists={experiments_exists}, length={experiments_length}")
+        
+        if experiments_length == 0 and experiments_exists:
+            st.warning("Автоматический подбор завершился, но не удалось сохранить результаты экспериментов. Попробуйте запустить подбор заново.")
+        else:
+            st.info("Нет доступных экспериментов для отображения. Запустите автоматический подбор параметров для получения результатов.")
+        
+        if st.button("🔍 Показать состояние session_state (отладка)"):
+            debug_info = {
+                "auto_tuning_experiments_exists": experiments_exists,
+                "auto_tuning_experiments_length": experiments_length,
+                "ar_results_exists": 'ar_results' in st.session_state,
+                "ar_model_exists": 'ar_model' in st.session_state,
+                "session_state_keys": list(st.session_state.keys())
+            }
+            st.json(debug_info)
+            
+            # Показать первые несколько экспериментов, если они есть
+            if experiments_length > 0:
+                st.markdown("**Первый эксперимент (пример):**")
+                first_exp = st.session_state.auto_tuning_experiments[0]
+                st.json({
+                    "model_info": first_exp.get('model_info', 'N/A'),
+                    "params": first_exp.get('params', {}),
+                    "has_train_metrics": 'train_metrics' in first_exp,
+                    "has_test_metrics": 'test_metrics' in first_exp,
+                    "rank": first_exp.get('rank', 'N/A')
+                })
+        return
+    
+    logger.info("Displaying auto-tuning experiments section")
+    st.subheader("🔍 Результаты автоматического подбора параметров")
+    
+    # Отладочная информация
+    st.info(f"🔍 Найдено {len(st.session_state.auto_tuning_experiments)} моделей для анализа")
+
+    # Get criterion info from session_state
+    try:
+        criterion_info = st.session_state.get('last_info_criterion', 'AIC').upper()
+    except:
+        criterion_info = "AIC"  # Default fallback
+    
+    st.info(f"Выбор модели основан на критерии {criterion_info}. Меньшее значение = лучшая модель.")
+    st.info(f"Всего протестировано моделей: {len(st.session_state.auto_tuning_experiments)}")
+    
+    # Create a DataFrame for comparison with enhanced metrics
+    models_data = []
+    for exp in st.session_state.auto_tuning_experiments:
+        # Extract metrics for readability
+        train_metrics = exp['train_metrics']
+        test_metrics = exp['test_metrics']
+        
+        # Use total_time if available, otherwise fall back to train_time
+        display_time = exp.get('total_time', exp.get('train_time', 0))
+        
+        model_data = {
+            'Модель': exp['model_info'],
+            'Ранг': exp['rank'],
+            f'{criterion_info}': exp.get('info_criterion', 'Н/Д'),
+            
+            # Training metrics
+            'R² (обуч)': train_metrics.get('r2', 'Н/Д'),
+            'Adjusted R²': train_metrics.get('adj_r2', 'Н/Д'),
+            'MSE': train_metrics.get('mse', 'Н/Д'),
+            'RMSE': train_metrics.get('rmse', 'Н/Д'),
+            'MAE': train_metrics.get('mae', 'Н/Д'),
+            'MAPE': train_metrics.get('mape', 'Н/Д'),
+            'SMAPE': train_metrics.get('smape', 'Н/Д'),
+            'MASE': train_metrics.get('mase', 'Н/Д'),
+            'Theil U2': train_metrics.get('theil_u2', 'Н/Д'),
+            
+            # Test metrics
+            'R² (тест)': test_metrics.get('r2', 'Н/Д'),
+            'Adjusted R² (тест)': test_metrics.get('adj_r2', 'Н/Д'),
+            'MSE (тест)': test_metrics.get('mse', 'Н/Д'),
+            'RMSE (тест)': test_metrics.get('rmse', 'Н/Д'),
+            'MAE (тест)': test_metrics.get('mae', 'Н/Д'),
+            'MAPE (тест)': test_metrics.get('mape', 'Н/Д'),
+            'SMAPE (тест)': test_metrics.get('smape', 'Н/Д'),
+            'MASE (тест)': test_metrics.get('mase', 'Н/Д'),
+            'Theil U2 (тест)': test_metrics.get('theil_u2', 'Н/Д'),
+            
+            'Время (сек)': display_time
+        }
+        models_data.append(model_data)
+        logger.info(f"Added model to comparison table: {model_data['Модель']} with {criterion_info}: {model_data[f'{criterion_info}']}")
+    
+    # Sort by criterion value (not by rank which might be wrong)
+    models_df = pd.DataFrame(models_data)
+    models_df[f'{criterion_info}'] = pd.to_numeric(models_df[f'{criterion_info}'], errors='coerce')
+    models_df = models_df.sort_values(f'{criterion_info}')
+    
+    # Re-assign ranks based on sorted criterion values
+    models_df['Ранг'] = range(1, len(models_df) + 1)
+    
+    logger.info(f"Created comparison DataFrame with {len(models_df)} rows, sorted by {criterion_info}")
+    
+    # Add filter options for the table
+    st.subheader("Таблица сравнения моделей")
+    
+    # Create metric display options
+    col1, col2 = st.columns(2)
+    with col1:
+        show_train_metrics = st.checkbox("Показать метрики обучающей выборки", value=True)
+    with col2:
+        show_test_metrics = st.checkbox("Показать метрики тестовой выборки", value=True)
+    
+    # Filter columns based on user selection
+    display_columns = ['Модель', 'Ранг', f'{criterion_info}']
+    
+    if show_train_metrics:
+        train_metric_cols = [col for col in models_df.columns if '(обуч)' in col]
+        display_columns.extend(train_metric_cols)
+    
+    if show_test_metrics:
+        test_metric_cols = [col for col in models_df.columns if '(тест)' in col]
+        display_columns.extend(test_metric_cols)
+    
+    display_columns.append('Время (сек)')
+    
+    # Display the filtered comparison table
+    st.dataframe(models_df[display_columns], use_container_width=True)
+    
+    # Allow user to download the complete comparison table
+    csv = models_df.to_csv(index=False)
+    st.download_button(
+        label="Скачать полную таблицу сравнения (CSV)",
+        data=csv,
+        file_name=f"arima_models_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv"
+    )
+    
+    logger.info("Displayed comparison table")
+    
+    # Detailed view of experiments with tabs
+    if len(models_df) > 0:
+        st.subheader("Подробная информация о всех протестированных моделях")
+        
+        # Get ALL models based on the sorted DataFrame
+        all_model_indices = models_df.index.tolist()
+        all_experiments = [st.session_state.auto_tuning_experiments[i] for i in all_model_indices]
+        
+        # Update experiment ranks to match the sorted order
+        for i, idx in enumerate(all_model_indices):
+            st.session_state.auto_tuning_experiments[idx]['rank'] = i + 1
+        
+        # Create tabs for ALL experiments
+        experiment_tabs = st.tabs([f"#{i+1}: {exp['model_info']}" 
+                                 for i, exp in enumerate(all_experiments)])
+        
+        # Fill each tab with details
+        for i, tab in enumerate(experiment_tabs):
+            if i < len(all_experiments):
+                exp = all_experiments[i]
+                with tab:
+                    # Show rank and criterion value prominently
+                    criterion_value = exp.get('info_criterion', 'Н/Д')
+                    formatted_criterion = f"{criterion_value:.4f}" if isinstance(criterion_value, (int, float)) else str(criterion_value)
+                    
+                    st.markdown(f"### Модель #{i+1}: {exp['model_info']}")
+                    st.markdown(f"**{criterion_info}**: {formatted_criterion}")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Обучающая выборка:**")
+                        metrics_train = exp['train_metrics']
+                        st.metric("RMSE", f"{metrics_train.get('rmse', 'Н/Д'):.4f}")
+                        st.metric("MAE", f"{metrics_train.get('mae', 'Н/Д'):.4f}")
+                        st.metric("MAPE", f"{metrics_train.get('mape', 'Н/Д'):.4f}" if 'mape' in metrics_train else "Н/Д")
+                        st.metric("SMAPE", f"{metrics_train.get('smape', 'Н/Д'):.4f}" if 'smape' in metrics_train else "Н/Д")
+                        st.metric("MASE", f"{metrics_train.get('mase', 'Н/Д'):.4f}" if 'mase' in metrics_train else "Н/Д")
+                        st.metric("R²", f"{metrics_train.get('r2', np.nan):.4f}")
+                        st.metric("Adjusted R²", f"{metrics_train.get('adj_r2', np.nan):.4f}")
+                        
+                    with col2:
+                        st.markdown("**Тестовая выборка:**")
+                        metrics_test = exp['test_metrics']
+                        st.metric("RMSE", f"{metrics_test.get('rmse', 'Н/Д'):.4f}")
+                        st.metric("MAE", f"{metrics_test.get('mae', 'Н/Д'):.4f}")
+                        st.metric("MAPE", f"{metrics_test.get('mape', 'Н/Д'):.4f}" if 'mape' in metrics_test else "Н/Д")
+                        st.metric("SMAPE", f"{metrics_test.get('smape', 'Н/Д'):.4f}" if 'smape' in metrics_test else "Н/Д")
+                        st.metric("MASE", f"{metrics_test.get('mase', 'Н/Д'):.4f}" if 'mase' in metrics_test else "Н/Д")
+                        st.metric("R²", f"{metrics_test.get('r2', np.nan):.4f}")
+                        st.metric("Adjusted R²", f"{metrics_test.get('adj_r2', np.nan):.4f}")
+                    
+                    # Generate forecast figure for this experiment model
+                    try:
+                        if st.session_state.ar_results and "original_series" in st.session_state.ar_results and "train" in st.session_state.ar_results and "test" in st.session_state.ar_results:
+                            # Create forecast figure for this experiment model
+                            forecast_fig = plot_forecast_plotly(
+                                model=exp['model'],
+                                steps=len(st.session_state.ar_results['test']),
+                                original_data=st.session_state.ar_results['original_series'],
+                                train_data=st.session_state.ar_results['train'],
+                                test_data=st.session_state.ar_results['test'],
+                                title=f"Прогноз модели #{i+1}: {exp['model_info']}"
+                            )
+                            st.plotly_chart(forecast_fig, use_container_width=True)
+                    except Exception as e:
+                        st.warning(f"Не удалось отобразить прогноз для модели: {str(e)}")
+                    
+                    # Add download report button for this model
+                    try:
+                        # Create forecast figure for this experiment model
+                        forecast_fig = plot_forecast_matplotlib(
+                            model=exp['model'],
+                            steps=len(st.session_state.ar_results['test']),
+                            original_data=st.session_state.ar_results['original_series'],
+                            train_data=st.session_state.ar_results['train'],
+                            test_data=st.session_state.ar_results['test'],
+                            title=f"Прогноз модели #{i+1}: {exp['model_info']}"
+                        )
+                        forecast_img_base64 = reporting.save_plot_to_base64(forecast_fig, backend='matplotlib')
+                        
+                        # Create empty loss figure
+                        loss_fig, ax = plt.subplots(figsize=(8, 4))
+                        ax.text(0.5, 0.5, "Для авторегрессионных моделей график потерь не применим", 
+                            ha='center', va='center', fontsize=12)
+                        ax.set_axis_off()
+                        loss_img_base64 = reporting.save_plot_to_base64(loss_fig, backend='matplotlib')
+                        
+                        # Generate report
+                        md_report = reporting.generate_markdown_report(
+                            title=f"Отчет по модели #{i+1}: {exp['model_info']}",
+                            description=f"Авторегрессионная модель {exp['model_info']} из автоматического подбора параметров (ранг {i+1}).",
+                            metrics_train=exp['train_metrics'],
+                            metrics_test=exp['test_metrics'],
+                            train_time=exp.get('train_time', 0),
+                            forecast_img_base64=forecast_img_base64,
+                            loss_img_base64=loss_img_base64,
+                            params=exp['params'],
+                            early_stopping=False,
+                            early_stopping_epoch=None
+                        )
+                        
+                        # Generate PDF
+                        pdf_bytes = None
+                        try:
+                            pdf_bytes = reporting.markdown_to_pdf(md_report)
+                        except Exception as e:
+                            st.warning(f"Не удалось сгенерировать PDF: {e}")
+                        
+                        # Add download buttons
+                        st.markdown("### Скачать отчет по этой модели")
+                        reporting.download_report_buttons(
+                            md_report, 
+                            pdf_bytes, 
+                            md_filename=f"arima_model_{i+1}_report.md", 
+                            pdf_filename=f"arima_model_{i+1}_report.pdf"
+                        )
+                    except Exception as e:
+                        st.error(f"Не удалось создать отчет по эксперименту: {str(e)}")
+
+        # Add consolidated report option
+        st.subheader("Сводный отчет по автоматическому подбору")
+        if st.button("Сгенерировать сводный отчет"):
+            try:
+                # Create a consolidated report with all experiments
+                consolidated_md = "# Сводный отчет по автоматическому подбору параметров\n\n"
+                consolidated_md += f"Дата и время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                consolidated_md += "## Сравнение моделей\n\n"
+                
+                # Enhanced comparison table with more metrics
+                table_md = "| Ранг | Модель | " + criterion_info + " | R² (тест) | Adj R² (тест) | RMSE (тест) | MAE (тест) | MAPE (тест) | SMAPE (тест) | MASE (тест) | Theil U2 (тест) |\n"
+                table_md += "|------|--------|" + "-" * len(criterion_info) + "|----------|-------------|------------|------------|-------------|--------------|------------|----------------|\n"
+                
+                # Sort experiments by rank for the table
+                sorted_experiments = sorted(st.session_state.auto_tuning_experiments, key=lambda x: x['rank'])
+                
+                for exp in sorted_experiments:
+                    metrics = exp['test_metrics']
+                    criterion_val = exp.get('info_criterion', 'Н/Д')
+                    
+                    # Format values correctly by evaluating conditional expressions outside the f-string
+                    formatted_criterion = f"{criterion_val:.4f}" if isinstance(criterion_val, (int, float)) else str(criterion_val)
+                    formatted_r2 = f"{metrics.get('r2', 'Н/Д'):.4f}" if isinstance(metrics.get('r2', 'Н/Д'), (int, float)) else str(metrics.get('r2', 'Н/Д'))
+                    formatted_adj_r2 = f"{metrics.get('adj_r2', 'Н/Д'):.4f}" if isinstance(metrics.get('adj_r2', 'Н/Д'), (int, float)) else str(metrics.get('adj_r2', 'Н/Д'))
+                    formatted_rmse = f"{metrics.get('rmse', 'Н/Д'):.4f}" if isinstance(metrics.get('rmse', 'Н/Д'), (int, float)) else str(metrics.get('rmse', 'Н/Д'))
+                    formatted_mae = f"{metrics.get('mae', 'Н/Д'):.4f}" if isinstance(metrics.get('mae', 'Н/Д'), (int, float)) else str(metrics.get('mae', 'Н/Д'))
+                    formatted_mape = f"{metrics.get('mape', 'Н/Д'):.4f}" if isinstance(metrics.get('mape', 'Н/Д'), (int, float)) else str(metrics.get('mape', 'Н/Д'))
+                    formatted_smape = f"{metrics.get('smape', 'Н/Д'):.4f}" if isinstance(metrics.get('smape', 'Н/Д'), (int, float)) else str(metrics.get('smape', 'Н/Д'))
+                    formatted_mase = f"{metrics.get('mase', 'Н/Д'):.4f}" if isinstance(metrics.get('mase', 'Н/Д'), (int, float)) else str(metrics.get('mase', 'Н/Д'))
+                    formatted_theil = f"{metrics.get('theil_u2', 'Н/Д'):.4f}" if isinstance(metrics.get('theil_u2', 'Н/Д'), (int, float)) else str(metrics.get('theil_u2', 'Н/Д'))
+                    
+                    # Add row to table with proper formatting
+                    table_md += f"| {exp['rank']} | {exp['model_info']} | {formatted_criterion} | "
+                    table_md += f"{formatted_r2} | {formatted_adj_r2} | {formatted_rmse} | "
+                    table_md += f"{formatted_mae} | {formatted_mape} | {formatted_smape} | "
+                    table_md += f"{formatted_mase} | {formatted_theil} |\n"
+                
+                consolidated_md += table_md + "\n\n"
+                
+                # Add details for each model (all models, not just top 5)
+                for i, exp in enumerate(sorted_experiments):
+                    consolidated_md += f"## Модель #{i+1}: {exp['model_info']}\n\n"
+                    
+                    # Format parameters
+                    params_text = "\n".join([f"- **{k}**: {v}" for k, v in exp['params'].items()])
+                    consolidated_md += f"### Параметры\n{params_text}\n\n"
+                    
+                    # Add timing information
+                    train_time = exp.get('train_time', 0)
+                    metrics_time = exp.get('metrics_time', 0)
+                    total_time = exp.get('total_time', train_time)
+                    
+                    consolidated_md += f"### Время выполнения\n"
+                    consolidated_md += f"- **Обучение модели**: {train_time:.4f} сек.\n"
+                    if metrics_time > 0:
+                        consolidated_md += f"- **Расчет метрик**: {metrics_time:.4f} сек.\n"
+                    consolidated_md += f"- **Общее время**: {total_time:.4f} сек.\n\n"
+                    
+                    # Format metrics with all available metrics
+                    consolidated_md += "### Метрики\n\n"
+                    consolidated_md += "**Обучающая выборка:**\n"
+                    train_metrics = exp['train_metrics']
+                    for metric_name, nice_name in [
+                        ('r2', 'R²'), ('adj_r2', 'Adjusted R²'), ('mse', 'MSE'),
+                        ('rmse', 'RMSE'), ('mae', 'MAE'), ('mape', 'MAPE'),
+                        ('smape', 'SMAPE'), ('mase', 'MASE'), ('theil_u2', 'Theil U2')
+                    ]:
+                        value = train_metrics.get(metric_name, 'Н/Д')
+                        formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
+                        consolidated_md += f"- **{nice_name}**: {formatted_value}\n"
+                    
+                    consolidated_md += "\n"
+                    
+                    # Test metrics with proper formatting
+                    consolidated_md += "**Тестовая выборка:**\n"
+                    test_metrics = exp['test_metrics']
+                    
+                    # Apply proper formatting for each metric
+                    for metric_name, nice_name in [
+                        ('r2', 'R²'), ('adj_r2', 'Adjusted R²'), ('mse', 'MSE'),
+                        ('rmse', 'RMSE'), ('mae', 'MAE'), ('mape', 'MAPE'),
+                        ('smape', 'SMAPE'), ('mase', 'MASE'), ('theil_u2', 'Theil U2')
+                    ]:
+                        value = test_metrics.get(metric_name, 'Н/Д')
+                        formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
+                        consolidated_md += f"- **{nice_name}**: {formatted_value}\n"
+                    
+                    consolidated_md += "\n"
+                    
+                    # Add separator
+                    consolidated_md += "---\n\n"
+                
+                # Generate and offer consolidated report
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                st.download_button(
+                    label="Скачать сводный отчет (.md)",
+                    data=consolidated_md,
+                    file_name=f"arima_autotuning_report_{timestamp}.md",
+                    mime="text/markdown"
+                )
+                
+                # Try to generate PDF
+                try:
+                    pdf_bytes = reporting.markdown_to_pdf(consolidated_md)
+                    st.download_button(
+                        label="Скачать сводный отчет (.pdf)",
+                        data=pdf_bytes,
+                        file_name=f"arima_autotuning_report_{timestamp}.pdf",
+                        mime="application/pdf"
+                    )
+                except Exception as e:
+                    st.warning(f"Не удалось сгенерировать PDF для сводного отчета: {e}")
+                
+            except Exception as e:
+                st.error(f"Ошибка при создании сводного отчета: {str(e)}")
+
 def main():
     # Заголовок
     st.title("Авторегрессионные модели (ARIMA/SARIMA)")
@@ -447,6 +826,66 @@ def main():
     fig = create_simple_time_series_plot(ts_series, title="Исходный временной ряд")
     st.plotly_chart(fig, use_container_width=True)
     
+    # Добавляем анализ АКФ и ЧАКФ
+    st.subheader("Анализ автокорреляции")
+    
+    with st.expander("О функциях автокорреляции", expanded=False):
+        st.markdown("""
+        **АКФ (Автокорреляционная функция)** показывает корреляцию между значениями ряда, сдвинутыми на различное количество периодов (лагов). Помогает определить:
+        - Сезонность в данных
+        - Подходящий порядок MA (q) для ARIMA модели
+        
+        **ЧАКФ (Частная автокорреляционная функция)** показывает корреляцию между значениями после исключения влияния промежуточных лагов. Помогает определить:
+        - Подходящий порядок AR (p) для ARIMA модели
+        - Наличие прямых зависимостей между отдаленными периодами
+        
+        **Интерпретация:**
+        - Значения внутри доверительных интервалов (голубая область) считаются незначимыми
+        - Выход за пределы интервалов указывает на значимую корреляцию
+        - Постепенное затухание в АКФ указывает на нестационарность
+        - Резкий обрыв в ЧАКФ указывает на порядок AR процесса
+        """)
+    
+    # Параметры для АКФ и ЧАКФ
+    col1, col2 = st.columns(2)
+    with col1:
+        max_lags_acf = st.slider(
+            "Максимальное количество лагов для АКФ", 
+            min_value=10, 
+            max_value=min(100, len(ts_series)//4), 
+            value=min(40, len(ts_series)//10),
+            help="Большее количество лагов дает более полную картину корреляций"
+        )
+    with col2:
+        max_lags_pacf = st.slider(
+            "Максимальное количество лагов для ЧАКФ", 
+            min_value=10, 
+            max_value=min(100, len(ts_series)//4), 
+            value=min(40, len(ts_series)//10),
+            help="Большее количество лагов помогает лучше определить порядок AR"
+        )
+    
+    try:
+        # Строим АКФ и ЧАКФ - используем стандартные параметры функции
+        acf_pacf_fig = plot_acf_pacf_plotly(
+            ts_series, 
+            title="Функции автокорреляции временного ряда"
+        )
+        st.plotly_chart(acf_pacf_fig, use_container_width=True)
+        
+        # Автоматические рекомендации на основе АКФ/ЧАКФ
+        with st.expander("Автоматические рекомендации параметров", expanded=False):
+            try:
+                suggested_params = suggest_arima_params(ts_series)
+                st.markdown("**Рекомендуемые параметры ARIMA на основе анализа АКФ/ЧАКФ:**")
+                st.json(suggested_params)
+                st.info("Эти параметры основаны на анализе автокорреляций. Используйте их как отправную точку для ручной настройки.")
+            except Exception as e:
+                st.warning(f"Не удалось получить автоматические рекомендации: {str(e)}")
+    
+    except Exception as e:
+        st.error(f"Ошибка при построении функций автокорреляции: {str(e)}")
+
     # Боковая панель с параметрами
     st.sidebar.subheader("Настройки модели")
     
@@ -476,15 +915,15 @@ def main():
                 help="Критерий для выбора оптимальной модели"
             )
             
-            max_p = st.slider("Максимальный порядок AR (p)", 0, 5, 2)
-            max_d = st.slider("Максимальный порядок дифференцирования (d)", 0, 2, 1)
-            max_q = st.slider("Максимальный порядок MA (q)", 0, 5, 2)
+            max_p = st.slider("Максимальный порядок AR (p)", 0, 10, 5)  
+            max_d = st.slider("Максимальный порядок дифференцирования (d)", 0, 3, 2)  
+            max_q = st.slider("Максимальный порядок MA (q)", 0, 10, 5)  
             
             if seasonal:
-                max_P = st.slider("Максимальный сезонный порядок AR (P)", 0, 2, 1, key="auto_max_P")
-                max_D = st.slider("Максимальный сезонный порядок дифференцирования (D)", 0, 1, 1, key="auto_max_D")
-                max_Q = st.slider("Максимальный сезонный порядок MA (Q)", 0, 2, 1, key="auto_max_Q")
-                m = st.slider("Сезонный период (m)", 2, 365, 12, key="auto_seasonal_period")
+                max_P = st.slider("Максимальный сезонный порядок AR (P)", 0, 3, 2, key="auto_max_P")  
+                max_D = st.slider("Максимальный сезонный порядок дифференцирования (D)", 0, 2, 1, key="auto_max_D")  
+                max_Q = st.slider("Максимальный сезонный порядок MA (Q)", 0, 3, 2, key="auto_max_Q")  
+                m = st.slider("Сезонный период (m)", 2, 365, 24, key="auto_seasonal_period")
         
         forecast_steps = st.slider(
             "Шаги прогноза вперед", 
@@ -518,8 +957,8 @@ def main():
                         'max_p': max_p,
                         'max_d': max_d,
                         'max_q': max_q,
-                        'return_all_models': True,  # Получить все протестированные модели
-                        'verbose': True,  # Включить подробный вывод для отслеживания экспериментов
+                        'return_all_models': True,  
+                        'verbose': True,  
                     }
                     
                     if seasonal:
@@ -529,6 +968,9 @@ def main():
                             'max_Q': max_Q,
                             'm': m
                         })
+                    
+                    # Сохраняем последний использованный критерий в session_state для использования позже
+                    st.session_state.last_info_criterion = info_criterion
                     
                     # Запускаем автоматический подбор
                     logger.info(f"Starting auto_arima with params: {auto_params}")
@@ -544,23 +986,30 @@ def main():
                         
                         # Добавляем информацию о критерии
                         criterion_used = auto_results.get('criterion_used', info_criterion).upper()
-                        st.info(f"Модели ранжированы по критерию {criterion_used}. Меньшее значение = лучшая модель.")
+                        st.info(f"Модели ранжированы по критерию {criterion_used}. Меньше значение = лучшая модель.")
+                        
+                        # Очищаем список экспериментов перед добавлением новых
+                        experiments_list = []
+                        logger.info("Creating new experiments list")
                         
                         for i, model_info in enumerate(auto_results['all_models']):
-                            experiment_model = model_info['model']
-                            experiment_params = experiment_model.get_params()
+                            logger.info(f"Processing model {i+1}/{len(auto_results['all_models'])}")
                             
-                            # Получаем время обучения из model_info, обеспечивая минимальное ненулевое значение
-                            # Даже самая быстрая модель должна занимать хоть какое-то время
-                            fit_time = model_info.get('fit_time', None)
-                            
-                            # Если время отсутствует или равно 0, установим минимальное значение
-                            if fit_time is None or fit_time < 0.001:
-                                logger.warning(f"Model {i+1} ({experiment_model.__class__.__name__}) has no fit_time recorded, using a default minimal value")
-                                fit_time = 0.001  # 1 миллисекунда как минимальное время
-                            
-                            # Вычисляем метрики для этого эксперимента
                             try:
+                                experiment_model = model_info['model']
+                                experiment_params = experiment_model.get_params()
+                                
+                                # Получаем время обучения из model_info, обеспечивая минимальное ненулевое значение
+                                fit_time = model_info.get('fit_time', None)
+                                
+                                # Если время отсутствует или равно 0, установим минимальное значение
+                                if fit_time is None or fit_time < 0.001:
+                                    logger.warning(f"Model {i+1} ({experiment_model.__class__.__name__}) has no fit_time recorded, using a default minimal value")
+                                    fit_time = 0.001  # 1 миллисекунда как минимальное время
+                                
+                                # Вычисляем метрики для этого эксперимента
+                                logger.info(f"Calculating metrics for model {i+1}")
+                                
                                 # Засекаем дополнительное время для расчета метрик
                                 metrics_start_time = time.perf_counter()
                                 
@@ -580,16 +1029,29 @@ def main():
                                     'train_metrics': train_metrics,
                                     'test_metrics': test_metrics,
                                     'info_criterion': model_info.get('criterion_value', None),
-                                    'train_time': fit_time,  # Используем fit_time из model_info или минимальное значение
-                                    'metrics_time': metrics_time,  # Сохраняем время расчета метрик отдельно
-                                    'total_time': fit_time + metrics_time,  # Общее время (обучение + метрики)
-                                    'rank': i + 1  # Rank is based on the sorted order from auto_arima
+                                    'train_time': fit_time,  
+                                    'metrics_time': metrics_time,  
+                                    'total_time': fit_time + metrics_time,  
+                                    'rank': i + 1  
                                 }
-                                st.session_state.auto_tuning_experiments.append(experiment)
-                                logger.info(f"Added experiment {i+1}: {experiment['model_info']} with train_time: {fit_time:.4f}s, metrics_time: {metrics_time:.4f}s")
+                                
+                                experiments_list.append(experiment)
+                                logger.info(f"Successfully added experiment {i+1}: {experiment['model_info']} to list. Total experiments now: {len(experiments_list)}")
+                                
                             except Exception as exp_e:
-                                logger.error(f"Error collecting metrics for model: {str(exp_e)}")
-                                st.warning(f"Не удалось собрать метрики для модели {experiment_model.__class__.__name__}: {str(exp_e)}")
+                                logger.error(f"Error processing model {i+1}: {str(exp_e)}", exc_info=True)
+                                st.warning(f"Не удалось обработать модель {i+1}: {str(exp_e)}")
+                        
+                        # Присваиваем сразу всю коллекцию
+                        st.session_state.auto_tuning_experiments = experiments_list
+                        logger.info(f"Finished processing all models. Total experiments saved to session_state: {len(st.session_state.auto_tuning_experiments)}")
+                        
+                        # Принудительно обновляем состояние
+                        if len(st.session_state.auto_tuning_experiments) > 0:
+                            logger.info("Auto-tuning experiments successfully saved to session_state")
+                        else:
+                            logger.error("Failed to save any experiments to session_state")
+                            
                     else:
                         logger.warning("No 'all_models' key found in auto_results")
                     
@@ -625,333 +1087,8 @@ def main():
                     logger.error(f"Error in auto-tuning: {str(e)}", exc_info=True)
                     st.error(f"Ошибка при автоматическом подборе: {str(e)}")
     
-    # Display auto-tuning experiments if available
-    logger.info(f"Checking auto_tuning_experiments: exists={bool(st.session_state.auto_tuning_experiments)}, length={len(st.session_state.auto_tuning_experiments) if st.session_state.auto_tuning_experiments else 0}")
-    if st.session_state.auto_tuning_experiments and len(st.session_state.auto_tuning_experiments) > 0:
-        logger.info("Displaying auto-tuning experiments section")
-        st.subheader("🔍 Результаты автоматического подбора параметров")
-        
-        # Display information about ranking criteria
-        criterion_info = info_criterion.upper() if 'info_criterion' not in st.session_state else st.session_state.info_criterion.upper()
-        st.info(f"Выбор модели основан на критерии {criterion_info}. Меньшее значение = лучшая модель.")
-        st.info(f"Всего протестировано моделей: {len(st.session_state.auto_tuning_experiments)}")
-        
-        # Create a DataFrame for comparison with enhanced metrics
-        models_data = []
-        for exp in st.session_state.auto_tuning_experiments:
-            # Extract metrics for readability
-            train_metrics = exp['train_metrics']
-            test_metrics = exp['test_metrics']
-            
-            # Use total_time if available, otherwise fall back to train_time
-            display_time = exp.get('total_time', exp.get('train_time', 0))
-            
-            model_data = {
-                'Модель': exp['model_info'],
-                'Ранг': exp['rank'],
-                f'{criterion_info}': exp.get('info_criterion', 'Н/Д'),
-                
-                # Training metrics
-                'R² (обуч)': train_metrics.get('r2', 'Н/Д'),
-                'Adjusted R²': train_metrics.get('adj_r2', 'Н/Д'),
-                'MSE': train_metrics.get('mse', 'Н/Д'),
-                'RMSE': train_metrics.get('rmse', 'Н/Д'),
-                'MAE': train_metrics.get('mae', 'Н/Д'),
-                'MAPE': train_metrics.get('mape', 'Н/Д'),
-                'SMAPE': train_metrics.get('smape', 'Н/Д'),
-                'MASE': train_metrics.get('mase', 'Н/Д'),
-                'Theil U2': train_metrics.get('theil_u2', 'Н/Д'),
-                
-                # Test metrics
-                'R² (тест)': test_metrics.get('r2', 'Н/Д'),
-                'Adjusted R² (тест)': test_metrics.get('adj_r2', 'Н/Д'),
-                'MSE (тест)': test_metrics.get('mse', 'Н/Д'),
-                'RMSE (тест)': test_metrics.get('rmse', 'Н/Д'),
-                'MAE (тест)': test_metrics.get('mae', 'Н/Д'),
-                'MAPE (тест)': test_metrics.get('mape', 'Н/Д'),
-                'SMAPE (тест)': test_metrics.get('smape', 'Н/Д'),
-                'MASE (тест)': test_metrics.get('mase', 'Н/Д'),
-                'Theil U2 (тест)': test_metrics.get('theil_u2', 'Н/Д'),
-                
-                'Время (сек)': display_time
-            }
-            models_data.append(model_data)
-            logger.info(f"Added model to comparison table: {model_data['Модель']} with {criterion_info}: {model_data[f'{criterion_info}']}")
-        
-        # Sort by criterion value (not by rank which might be wrong)
-        models_df = pd.DataFrame(models_data)
-        models_df[f'{criterion_info}'] = pd.to_numeric(models_df[f'{criterion_info}'], errors='coerce')
-        models_df = models_df.sort_values(f'{criterion_info}')
-        
-        # Re-assign ranks based on sorted criterion values
-        models_df['Ранг'] = range(1, len(models_df) + 1)
-        
-        logger.info(f"Created comparison DataFrame with {len(models_df)} rows, sorted by {criterion_info}")
-        
-        # Add filter options for the table
-        st.subheader("Таблица сравнения моделей")
-        
-        # Create metric display options
-        col1, col2 = st.columns(2)
-        with col1:
-            show_train_metrics = st.checkbox("Показать метрики обучающей выборки", value=True)
-        with col2:
-            show_test_metrics = st.checkbox("Показать метрики тестовой выборки", value=True)
-        
-        # Filter columns based on user selection
-        display_columns = ['Модель', 'Ранг', f'{criterion_info}']
-        
-        if show_train_metrics:
-            train_metric_cols = [col for col in models_df.columns if '(обуч)' in col]
-            display_columns.extend(train_metric_cols)
-        
-        if show_test_metrics:
-            test_metric_cols = [col for col in models_df.columns if '(тест)' in col]
-            display_columns.extend(test_metric_cols)
-        
-        display_columns.append('Время (сек)')
-        
-        # Display the filtered comparison table
-        st.dataframe(models_df[display_columns], use_container_width=True)
-        
-        # Allow user to download the complete comparison table
-        csv = models_df.to_csv(index=False)
-        st.download_button(
-            label="Скачать полную таблицу сравнения (CSV)",
-            data=csv,
-            file_name=f"arima_models_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
-        )
-        
-        logger.info("Displayed comparison table")
-        
-        # Detailed view of experiments with tabs - but use the sorted order
-        if len(models_df) > 0:
-            st.subheader("Подробная информация о лучших моделях")
-            
-            # Get the top 5 models based on the sorted DataFrame
-            top_model_indices = models_df.index[:5].tolist()
-            top_experiments = [st.session_state.auto_tuning_experiments[i] for i in top_model_indices]
-            
-            # Update experiment ranks to match the sorted order
-            for i, idx in enumerate(top_model_indices):
-                st.session_state.auto_tuning_experiments[idx]['rank'] = i + 1
-            
-            # Create tabs for each experiment
-            experiment_tabs = st.tabs([f"Модель {i+1}: {exp['model_info']}" 
-                                     for i, exp in enumerate(top_experiments)])
-            
-            # Fill each tab with details
-            for i, tab in enumerate(experiment_tabs):
-                if i < len(top_experiments):
-                    exp = top_experiments[i]
-                    with tab:
-                        st.markdown(f"### {exp['model_info']}")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown("**Обучающая выборка:**")
-                            metrics_train = exp['train_metrics']
-                            st.metric("RMSE", f"{metrics_train.get('rmse', 'Н/Д'):.4f}")
-                            st.metric("MAE", f"{metrics_train.get('mae', 'Н/Д'):.4f}")
-                            st.metric("MAPE", f"{metrics_train.get('mape', 'Н/Д'):.4f}" if 'mape' in metrics_train else "Н/Д")
-                            st.metric("SMAPE", f"{metrics_train.get('smape', 'Н/Д'):.4f}" if 'smape' in metrics_train else "Н/Д")
-                            st.metric("MASE", f"{metrics_train.get('mase', 'Н/Д'):.4f}" if 'mase' in metrics_train else "Н/Д")
-                            st.metric("R²", f"{metrics_train.get('r2', np.nan):.4f}")
-                            st.metric("Adjusted R²", f"{metrics_train.get('adj_r2', np.nan):.4f}")
-                            
-                        with col2:
-                            st.markdown("**Тестовая выборка:**")
-                            metrics_test = exp['test_metrics']
-                            st.metric("RMSE", f"{metrics_test.get('rmse', 'Н/Д'):.4f}")
-                            st.metric("MAE", f"{metrics_test.get('mae', 'Н/Д'):.4f}")
-                            st.metric("MAPE", f"{metrics_test.get('mape', 'Н/Д'):.4f}" if 'mape' in metrics_test else "Н/Д")
-                            st.metric("SMAPE", f"{metrics_test.get('smape', 'Н/Д'):.4f}" if 'smape' in metrics_test else "Н/Д")
-                            st.metric("MASE", f"{metrics_test.get('mase', 'Н/Д'):.4f}" if 'mase' in metrics_test else "Н/Д")
-                            st.metric("R²", f"{metrics_test.get('r2', np.nan):.4f}")
-                            st.metric("Adjusted R²", f"{metrics_test.get('adj_r2', np.nan):.4f}")
-                        
-                        # Generate forecast figure for this experiment model
-                        try:
-                            if "original_series" in st.session_state.ar_results and "train" in st.session_state.ar_results and "test" in st.session_state.ar_results:
-                                # Create forecast figure for this experiment model
-                                forecast_fig = plot_forecast_plotly(
-                                    model=exp['model'],
-                                    steps=len(st.session_state.ar_results['test']),
-                                    original_data=st.session_state.ar_results['original_series'],
-                                    train_data=st.session_state.ar_results['train'],
-                                    test_data=st.session_state.ar_results['test'],
-                                    title=f"Прогноз модели {exp['model_info']}"
-                                )
-                                st.plotly_chart(forecast_fig, use_container_width=True)
-                        except Exception as e:
-                            st.warning(f"Не удалось отобразить прогноз для модели: {str(e)}")
-                        
-                        # Add download report button for this model
-                        try:
-                            # Create forecast figure for this experiment model
-                            forecast_fig = plot_forecast_matplotlib(
-                                model=exp['model'],
-                                steps=len(st.session_state.ar_results['test']),
-                                original_data=st.session_state.ar_results['original_series'],
-                                train_data=st.session_state.ar_results['train'],
-                                test_data=st.session_state.ar_results['test'],
-                                title=f"Прогноз модели {exp['model_info']}"
-                            )
-                            forecast_img_base64 = reporting.save_plot_to_base64(forecast_fig, backend='matplotlib')
-                            
-                            # Create empty loss figure
-                            loss_fig, ax = plt.subplots(figsize=(8, 4))
-                            ax.text(0.5, 0.5, "Для авторегрессионных моделей график потерь не применим", 
-                                ha='center', va='center', fontsize=12)
-                            ax.set_axis_off()
-                            loss_img_base64 = reporting.save_plot_to_base64(loss_fig, backend='matplotlib')
-                            
-                            # Generate report
-                            md_report = reporting.generate_markdown_report(
-                                title=f"Отчет по эксперименту {exp['model_info']}",
-                                description=f"Авторегрессионная модель {exp['model_info']} из автоматического подбора параметров.",
-                                metrics_train=exp['train_metrics'],
-                                metrics_test=exp['test_metrics'],
-                                train_time=exp.get('train_time', 0),
-                                forecast_img_base64=forecast_img_base64,
-                                loss_img_base64=loss_img_base64,
-                                params=exp['params'],
-                                early_stopping=False,
-                                early_stopping_epoch=None
-                            )
-                            
-                            # Generate PDF
-                            pdf_bytes = None
-                            try:
-                                pdf_bytes = reporting.markdown_to_pdf(md_report)
-                            except Exception as e:
-                                st.warning(f"Не удалось сгенерировать PDF: {e}")
-                            
-                            # Add download buttons
-                            st.markdown("### Скачать отчет по этой модели")
-                            reporting.download_report_buttons(
-                                md_report, 
-                                pdf_bytes, 
-                                md_filename=f"arima_model_{i+1}_report.md", 
-                                pdf_filename=f"arima_model_{i+1}_report.pdf"
-                            )
-                        except Exception as e:
-                            st.error(f"Не удалось создать отчет по эксперименту: {str(e)}")
-            
-            # Add consolidated report option
-            st.subheader("Сводный отчет по автоматическому подбору")
-            if st.button("Сгенерировать сводный отчет"):
-                try:
-                    # Create a consolidated report with all experiments
-                    consolidated_md = "# Сводный отчет по автоматическому подбору параметров\n\n"
-                    consolidated_md += f"Дата и время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                    consolidated_md += "## Сравнение моделей\n\n"
-                    
-                    # Enhanced comparison table with more metrics
-                    table_md = "| Ранг | Модель | " + criterion_info + " | R² (тест) | Adj R² (тест) | RMSE (тест) | MAE (тест) | MAPE (тест) | SMAPE (тест) | MASE (тест) | Theil U2 (тест) |\n"
-                    table_md += "|------|--------|" + "-" * len(criterion_info) + "|----------|-------------|------------|------------|-------------|--------------|------------|----------------|\n"
-                    
-                    # Sort experiments by rank for the table
-                    sorted_experiments = sorted(st.session_state.auto_tuning_experiments, key=lambda x: x['rank'])
-                    
-                    for exp in sorted_experiments:
-                        metrics = exp['test_metrics']
-                        criterion_val = exp.get('info_criterion', 'Н/Д')
-                        
-                        # Format values correctly by evaluating conditional expressions outside the f-string
-                        formatted_criterion = f"{criterion_val:.4f}" if isinstance(criterion_val, (int, float)) else str(criterion_val)
-                        formatted_r2 = f"{metrics.get('r2', 'Н/Д'):.4f}" if isinstance(metrics.get('r2', 'Н/Д'), (int, float)) else str(metrics.get('r2', 'Н/Д'))
-                        formatted_adj_r2 = f"{metrics.get('adj_r2', 'Н/Д'):.4f}" if isinstance(metrics.get('adj_r2', 'Н/Д'), (int, float)) else str(metrics.get('adj_r2', 'Н/Д'))
-                        formatted_rmse = f"{metrics.get('rmse', 'Н/Д'):.4f}" if isinstance(metrics.get('rmse', 'Н/Д'), (int, float)) else str(metrics.get('rmse', 'Н/Д'))
-                        formatted_mae = f"{metrics.get('mae', 'Н/Д'):.4f}" if isinstance(metrics.get('mae', 'Н/Д'), (int, float)) else str(metrics.get('mae', 'Н/Д'))
-                        formatted_mape = f"{metrics.get('mape', 'Н/Д'):.4f}" if isinstance(metrics.get('mape', 'Н/Д'), (int, float)) else str(metrics.get('mape', 'Н/Д'))
-                        formatted_smape = f"{metrics.get('smape', 'Н/Д'):.4f}" if isinstance(metrics.get('smape', 'Н/Д'), (int, float)) else str(metrics.get('smape', 'Н/Д'))
-                        formatted_mase = f"{metrics.get('mase', 'Н/Д'):.4f}" if isinstance(metrics.get('mase', 'Н/Д'), (int, float)) else str(metrics.get('mase', 'Н/Д'))
-                        formatted_theil = f"{metrics.get('theil_u2', 'Н/Д'):.4f}" if isinstance(metrics.get('theil_u2', 'Н/Д'), (int, float)) else str(metrics.get('theil_u2', 'Н/Д'))
-                        
-                        # Add row to table with proper formatting
-                        table_md += f"| {exp['rank']} | {exp['model_info']} | {formatted_criterion} | "
-                        table_md += f"{formatted_r2} | {formatted_adj_r2} | {formatted_rmse} | "
-                        table_md += f"{formatted_mae} | {formatted_mape} | {formatted_smape} | "
-                        table_md += f"{formatted_mase} | {formatted_theil} |\n"
-                    
-                    consolidated_md += table_md + "\n\n"
-                    
-                    # Add details for each model (top 5)
-                    for i, exp in enumerate(sorted_experiments[:5]):
-                        consolidated_md += f"## Модель {i+1}: {exp['model_info']}\n\n"
-                        
-                        # Format parameters
-                        params_text = "\n".join([f"- **{k}**: {v}" for k, v in exp['params'].items()])
-                        consolidated_md += f"### Параметры\n{params_text}\n\n"
-                        
-                        # Add timing information
-                        train_time = exp.get('train_time', 0)
-                        metrics_time = exp.get('metrics_time', 0)
-                        total_time = exp.get('total_time', train_time)
-                        
-                        consolidated_md += f"### Время выполнения\n"
-                        consolidated_md += f"- **Обучение модели**: {train_time:.4f} сек.\n"
-                        if metrics_time > 0:
-                            consolidated_md += f"- **Расчет метрик**: {metrics_time:.4f} сек.\n"
-                        consolidated_md += f"- **Общее время**: {total_time:.4f} сек.\n\n"
-                        
-                        # Format metrics with all available metrics
-                        consolidated_md += "### Метрики\n\n"
-                        for metric_name, nice_name in [
-                            ('r2', 'R²'), ('adj_r2', 'Adjusted R²'), ('mse', 'MSE'),
-                            ('rmse', 'RMSE'), ('mae', 'MAE'), ('mape', 'MAPE'),
-                            ('smape', 'SMAPE'), ('mase', 'MASE'), ('theil_u2', 'Theil U2')
-                        ]:
-                            value = train_metrics.get(metric_name, 'Н/Д')
-                            formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
-                            consolidated_md += f"- **{nice_name}**: {formatted_value}\n"
-                        
-                        consolidated_md += "\n"
-                        
-                        # Test metrics with proper formatting
-                        consolidated_md += "**Тестовая выборка:**\n"
-                        test_metrics = exp['test_metrics']
-                        
-                        # Apply proper formatting for each metric
-                        for metric_name, nice_name in [
-                            ('r2', 'R²'), ('adj_r2', 'Adjusted R²'), ('mse', 'MSE'),
-                            ('rmse', 'RMSE'), ('mae', 'MAE'), ('mape', 'MAPE'),
-                            ('smape', 'SMAPE'), ('mase', 'MASE'), ('theil_u2', 'Theil U2')
-                        ]:
-                            value = test_metrics.get(metric_name, 'Н/Д')
-                            formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
-                            consolidated_md += f"- **{nice_name}**: {formatted_value}\n"
-                        
-                        consolidated_md += "\n"
-                        
-                        # Add separator
-                        consolidated_md += "---\n\n"
-                    
-                    # Generate and offer consolidated report
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    st.download_button(
-                        label="Скачать сводный отчет (.md)",
-                        data=consolidated_md,
-                        file_name=f"arima_autotuning_report_{timestamp}.md",
-                        mime="text/markdown"
-                    )
-                    
-                    # Try to generate PDF
-                    try:
-                        pdf_bytes = reporting.markdown_to_pdf(consolidated_md)
-                        st.download_button(
-                            label="Скачать сводный отчет (.pdf)",
-                            data=pdf_bytes,
-                            file_name=f"arima_autotuning_report_{timestamp}.pdf",
-                            mime="application/pdf"
-                        )
-                    except Exception as e:
-                        st.warning(f"Не удалось сгенерировать PDF для сводного отчета: {e}")
-                        
-                except Exception as e:
-                    st.error(f"Ошибка при создании сводного отчета: {str(e)}")
+    # Отображение результатов автоматического подбора - вызываем отдельную функцию
+    display_auto_tuning_experiments()
 
     with tabs[1]:
         st.header("Ручная настройка параметров")
@@ -1270,6 +1407,7 @@ def main():
     # Если модель еще не обучена, покажем инструкции
     else:
         st.info("Выберите режим настройки и нажмите 'Запустить обучение' для начала анализа.")
+
 
 if __name__ == "__main__":
     main()

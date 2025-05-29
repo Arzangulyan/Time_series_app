@@ -115,7 +115,7 @@ def create_unified_forecast_plot_plotly(
         y=original_series.values,
         mode='lines',
         name='Исходные данные',
-        line=dict(color='#1f77b4', width=2),
+        line=dict(color='gray', width=2),  # Изменяем на серый и толщину 2
         hovertemplate='<b>Исходные данные</b><br>' +
                      'Время: %{x}<br>' +
                      'Значение: %{y:.4f}<br>' +
@@ -129,7 +129,7 @@ def create_unified_forecast_plot_plotly(
             y=train_predictions.values,
             mode='lines',
             name='Прогноз (обучение)',
-            line=dict(color='#ff7f0e', width=3, dash='dot'),  # Увеличиваем толщину с 2 до 3
+            line=dict(color='#ff7f0e', width=4),  # Убираем dash, увеличиваем толщину до 4
             hovertemplate='<b>Прогноз (обучение)</b><br>' +
                          'Время: %{x}<br>' +
                          'Значение: %{y:.4f}<br>' +
@@ -143,7 +143,7 @@ def create_unified_forecast_plot_plotly(
             y=test_predictions.values,
             mode='lines',
             name='Прогноз (тест)',
-            line=dict(color='#2ca02c', width=3, dash='dash'),  # Увеличиваем толщину с 2 до 3
+            line=dict(color='#2ca02c', width=4),  # Убираем dash, увеличиваем толщину до 4
             hovertemplate='<b>Прогноз (тест)</b><br>' +
                          'Время: %{x}<br>' +
                          'Значение: %{y:.4f}<br>' +
@@ -291,17 +291,17 @@ def create_unified_forecast_plot_matplotlib(
     
     # Исходные данные
     ax.plot(original_series.index, original_series.values, 
-           label='Исходные данные', color='#1f77b4', linewidth=2)
+           label='Исходные данные', color='gray', linewidth=2)  # Изменяем на серый и толщину 2
     
     # Прогнозы на обучающей выборке
     if train_predictions is not None:
         ax.plot(train_predictions.index, train_predictions.values, 
-               label='Прогноз (обучение)', color='#ff7f0e', linewidth=3, linestyle=':')  # Увеличиваем толщину с 2 до 3
+               label='Прогноз (обучение)', color='#ff7f0e', linewidth=4)  # Убираем linestyle, увеличиваем толщину до 4
     
     # Прогнозы на тестовой выборке
     if test_predictions is not None:
         ax.plot(test_predictions.index, test_predictions.values, 
-               label='Прогноз (тест)', color='#2ca02c', linewidth=3, linestyle='--')  # Увеличиваем толщину с 2 до 3
+               label='Прогноз (тест)', color='#2ca02c', linewidth=4)  # Убираем linestyle, увеличиваем толщину до 4
     
     # Прогнозы на будущие периоды
     if future_predictions is not None:

@@ -90,6 +90,113 @@ def main():
     fig = create_simple_time_series_plot(ts_series, title="Исходный временной ряд")
     st.plotly_chart(fig, use_container_width=True)
     
+    # Добавляем анализ АКФ и ЧАКФ для LSTM
+    st.subheader("Анализ автокорреляции (для понимания структуры данных)")
+    
+    with st.expander("Зачем анализировать автокорреляцию для LSTM?", expanded=False):
+        st.markdown("""
+        Хотя LSTM сама способна выявлять зависимости в данных, анализ автокорреляции помогает:
+        
+        **Для настройки sequence_length:**
+        - АКФ показывает, на каких лагах есть значимые корреляции
+        - Это помогает выбрать оптимальную длину входной последовательности
+        
+        **Для понимания данных:**
+        - Выявление сезонных паттернов
+        - Определение периодичности в данных
+        - Оценка степени "памяти" временного ряда
+        
+        **Для интерпретации результатов:**
+        - Понимание, какие зависимости модель должна уловить
+        - Объяснение качества прогнозов
+        """)
+    
+    # Параметры для АКФ и ЧАКФ
+    col1, col2 = st.columns(2)
+    with col1:
+        max_lags_acf = st.slider(
+            "Максимальное количество лагов для АКФ", 
+            min_value=10, 
+            max_value=min(200, len(ts_series)//4), 
+            value=min(60, len(ts_series)//8),
+            key="lstm_acf_lags",
+            help="Для LSTM полезно анализировать более длинные зависимости"
+        )
+    with col2:
+        max_lags_pacf = st.slider(
+            "Максимальное количество лагов для ЧАКФ", 
+            min_value=10, 
+            max_value=min(200, len(ts_series)//4), 
+            value=min(60, len(ts_series)//8),
+            key="lstm_pacf_lags",
+            help="ЧАКФ поможет понять прямые зависимости в данных"
+        )
+    
+    try:
+        # Импортируем функцию для построения АКФ/ЧАКФ
+        from modules.autoregressive.visualization import plot_acf_pacf_plotly
+        
+        # Строим АКФ и ЧАКФ - используем стандартные параметры функции
+        acf_pacf_fig = plot_acf_pacf_plotly(
+            ts_series, 
+            title="Функции автокорреляции временного ряда (анализ для LSTM)"
+        )
+        st.plotly_chart(acf_pacf_fig, use_container_width=True)
+        
+        # Рекомендации для LSTM на основе анализа
+        with st.expander("Рекомендации для настройки LSTM", expanded=False):
+            # Анализируем АКФ для рекомендаций по sequence_length
+            try:
+                from statsmodels.tsa.stattools import acf
+                acf_values = acf(ts_series.dropna(), nlags=max_lags_acf, alpha=0.05)
+                
+                # Находим лаги с значимой корреляцией
+                significant_lags = []
+                if len(acf_values) > 1 and hasattr(acf_values[1], '__len__'):
+                    # Если есть доверительные интервалы
+                    acf_vals, conf_int = acf_values[0], acf_values[1]
+                    for i, (val, (lower, upper)) in enumerate(zip(acf_vals[1:], conf_int[1:]), 1):
+                        if val < lower or val > upper:
+                            significant_lags.append(i)
+                else:
+                    # Если только значения АКФ
+                    acf_vals = acf_values
+                    threshold = 1.96 / np.sqrt(len(ts_series))  # Приближенный доверительный интервал
+                    for i, val in enumerate(acf_vals[1:], 1):
+                        if abs(val) > threshold:
+                            significant_lags.append(i)
+                
+                st.markdown("**Анализ для настройки LSTM:**")
+                
+                if significant_lags:
+                    max_significant_lag = max(significant_lags)
+                    recommended_seq_length = min(max_significant_lag + 5, 50)  # +5 для запаса, но не больше 50
+                    
+                    st.markdown(f"""
+                    - **Значимые лаги найдены до:** {max_significant_lag}
+                    - **Рекомендуемая длина последовательности:** {recommended_seq_length}
+                    - **Количество значимых лагов:** {len(significant_lags)}
+                    """)
+                    
+                    if max_significant_lag > 50:
+                        st.warning("Обнаружены очень дальние зависимости. Рассмотрите использование более сложной архитектуры или предварительную обработку данных.")
+                    
+                    # Проверка на сезонность
+                    potential_seasons = [lag for lag in significant_lags if lag > 10]
+                    if potential_seasons:
+                        st.markdown(f"**Возможная сезонность на лагах:** {potential_seasons[:5]}")
+                        st.info("Рассмотрите включение сезонных признаков или увеличение длины последовательности для захвата сезонных паттернов.")
+                else:
+                    st.markdown("- **Значимые корреляции не обнаружены** - данные могут быть близки к белому шуму или требуют предварительной обработки")
+                    st.warning("Возможно, стоит попробовать дифференцирование ряда или другие методы предобработки.")
+                    
+            except Exception as e:
+                st.warning(f"Не удалось выполнить анализ для рекомендаций: {str(e)}")
+    
+    except Exception as e:
+        st.error(f"Ошибка при построении функций автокорреляции: {str(e)}")
+        st.info("Для анализа автокорреляции требуется модуль autoregressive. Продолжаем без этого анализа.")
+
     # Боковая панель с параметрами
     st.sidebar.subheader("Настройки LSTM")
     
