@@ -227,7 +227,7 @@ def fit_selected_model(data, model_type=None):
                     try:
                         simple_model.fit(data)
                         model = simple_model
-                        st.info(f"Использована упрощенная модель с пониженным порядком параметров.")
+                        st.info(f"Использована упрощенная модель с пониженным порядом параметров.")
                     except Exception as e3:
                         # Если все методы не сработали, вызываем исключение
                         raise ValueError(f"Не удалось обучить модель. Попробуйте выбрать другие параметры модели. Ошибка: {str(e3)}")
@@ -536,6 +536,10 @@ def display_auto_tuning_experiments():
     # Re-assign ranks based on sorted criterion values
     models_df['Ранг'] = range(1, len(models_df) + 1)
     
+    # Обновляем ранги в исходных экспериментах на основе отсортированной таблицы
+    for i, original_idx in enumerate(models_df.index):
+        st.session_state.auto_tuning_experiments[original_idx]['rank'] = i + 1
+    
     logger.info(f"Created comparison DataFrame with {len(models_df)} rows, sorted by {criterion_info}")
     
     # Add filter options for the table
@@ -579,22 +583,21 @@ def display_auto_tuning_experiments():
     if len(models_df) > 0:
         st.subheader("Подробная информация о всех протестированных моделях")
         
-        # Get ALL models based on the sorted DataFrame
-        all_model_indices = models_df.index.tolist()
-        all_experiments = [st.session_state.auto_tuning_experiments[i] for i in all_model_indices]
+        # Get ALL models based on the sorted DataFrame order (исправляем нумерацию)
+        sorted_experiments = []
+        for i, original_idx in enumerate(models_df.index):
+            exp = st.session_state.auto_tuning_experiments[original_idx].copy()
+            exp['rank'] = i + 1  # Устанавливаем правильный ранг
+            sorted_experiments.append(exp)
         
-        # Update experiment ranks to match the sorted order
-        for i, idx in enumerate(all_model_indices):
-            st.session_state.auto_tuning_experiments[idx]['rank'] = i + 1
-        
-        # Create tabs for ALL experiments
+        # Create tabs for ALL experiments with правильной нумерацией
         experiment_tabs = st.tabs([f"#{i+1}: {exp['model_info']}" 
-                                 for i, exp in enumerate(all_experiments)])
+                                 for i, exp in enumerate(sorted_experiments)])
         
         # Fill each tab with details
         for i, tab in enumerate(experiment_tabs):
-            if i < len(all_experiments):
-                exp = all_experiments[i]
+            if i < len(sorted_experiments):
+                exp = sorted_experiments[i]
                 with tab:
                     # Show rank and criterion value prominently
                     criterion_value = exp.get('info_criterion', 'Н/Д')
@@ -1178,6 +1181,82 @@ def main():
                 except Exception as e:
                     st.error(f"Ошибка при обучении модели: {str(e)}")
     
+    # Секция выбора модели для отображения результатов
+    if st.session_state.auto_tuning_experiments and len(st.session_state.auto_tuning_experiments) > 0:
+        st.subheader("🎯 Выбор модели для детального анализа")
+        
+        # Создаем список моделей для выбора, используя отсортированный порядок
+        model_options = []
+        # Получаем отсортированные эксперименты
+        sorted_df = pd.DataFrame([{'original_idx': i, 'criterion': exp.get('info_criterion', float('inf'))} 
+                                 for i, exp in enumerate(st.session_state.auto_tuning_experiments)])
+        sorted_df = sorted_df.sort_values('criterion')
+        
+        for display_rank, row in enumerate(sorted_df.itertuples(), 1):
+            original_idx = row.original_idx
+            exp = st.session_state.auto_tuning_experiments[original_idx]
+            criterion_value = exp.get('info_criterion', 'Н/Д')
+            criterion_str = f"{criterion_value:.4f}" if isinstance(criterion_value, (int, float)) else str(criterion_value)
+            
+            # Получаем критерий из session_state
+            criterion_name = st.session_state.get('last_info_criterion', 'AIC').upper();
+            
+            model_options.append(f"#{display_rank}: {exp['model_info']} ({criterion_name}: {criterion_str})")
+        
+        # Селектбокс для выбора модели
+        selected_model_index = st.selectbox(
+            "Выберите модель для детального анализа:",
+            range(len(model_options)),
+            format_func=lambda x: model_options[x],
+            index=0,  # По умолчанию выбрана лучшая модель
+            help="Выберите модель из списка экспериментов для отображения подробных результатов внизу страницы"
+        )
+        
+        # Кнопка для применения выбора
+        if st.button("📊 Показать результаты выбранной модели"):
+            try:
+                # Получаем выбранный эксперимент по отсортированному индексу
+                sorted_original_idx = int(sorted_df.iloc[selected_model_index]['original_idx'])  # Преобразуем в int
+                selected_exp = st.session_state.auto_tuning_experiments[sorted_original_idx]
+                selected_model = selected_exp['model']
+                
+                # Пересоздаем данные для выбранной модели
+                if st.session_state.ar_results:
+                    # Используем те же данные разбиения, что и в автоматическом подборе
+                    train = st.session_state.ar_results['train']
+                    test = st.session_state.ar_results['test']
+                    ts_series = st.session_state.ar_results['original_series']
+                    
+                    # Получаем прогнозы выбранной модели
+                    train_pred = selected_model.predict_in_sample()
+                    test_pred = selected_model.predict(steps=len(test))
+                    
+                    # Обновляем результаты в session_state
+                    st.session_state.ar_model = selected_model
+                    st.session_state.ar_results.update({
+                        'train_predictions': train_pred,
+                        'test_predictions': test_pred,
+                        'train_metrics': selected_exp['train_metrics'],
+                        'test_metrics': selected_exp['test_metrics'],
+                        'model_info': selected_exp['model_info'],
+                        'params': selected_exp['params'],
+                        'train_time': selected_exp.get('train_time', 0)
+                    })
+                    
+                    st.success(f"✅ Выбрана модель: {selected_exp['model_info']}")
+                    st.info("Результаты обновлены. Прокрутите страницу вниз, чтобы увидеть детальный анализ выбранной модели.")
+                    
+                    # Принудительный rerun для обновления отображения
+                    st.rerun()
+                    
+            except Exception as e:
+                st.error(f"Ошибка при выборе модели: {str(e)}")
+        
+        # Информация о текущей выбранной модели
+        if st.session_state.ar_model is not None:
+            current_model_info = display_model_information(st.session_state.ar_model)
+            st.info(f"🔍 Текущая модель для анализа: {current_model_info}")
+
     # Отображение результатов, если они есть
     if st.session_state.ar_results is not None:
         results = st.session_state.ar_results
